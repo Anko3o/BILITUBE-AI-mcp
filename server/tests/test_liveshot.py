@@ -42,26 +42,26 @@ class TestLiveShot(unittest.TestCase):
             return json.loads(f.read().strip().splitlines()[-1])
 
     def test_page_shot_saved(self):
-        C.push_user_danmaku("同事！", None, {"film": "live:5050", "focusAgo": 14.2},
+        C.push_user_danmaku("同事！", None, {"film": "live:2", "focusAgo": 14.2},
                            base64.b64encode(JPG).decode())
         ev = self._last_event()
         self.assertEqual(ev.get("shot"), "page")
         self.assertEqual(ev.get("focusAgo"), 14.2)
         self.assertEqual(self.grabbed, [])
-        self.assertEqual(C.live_dm_shot_bytes(5050, ev["id"]), JPG)
-        self.assertEqual(C.live_dm_shot_bytes(5050), JPG)            # 不给 id：两分钟内最近那条
+        self.assertEqual(C.live_dm_shot_bytes(2, ev["id"]), JPG)
+        self.assertEqual(C.live_dm_shot_bytes(2), JPG)            # 不给 id：两分钟内最近那条
 
     def test_fallback_when_missing_or_bad(self):
         for bad in (None, "", "not-base64!!", base64.b64encode(b"GIF89a" + b"\x00" * 3000).decode(),
                     base64.b64encode(b"\xff\xd8\xff" + b"\x00" * (C.SAY_FRAME_MAX + 1)).decode()):
             with self.subTest(bad=str(bad)[:12]):
                 n = len(self.grabbed)
-                C.push_user_danmaku("没带图", None, {"film": "live:5050", "focusAgo": 3}, bad)
+                C.push_user_danmaku("没带图", None, {"film": "live:2", "focusAgo": 3}, bad)
                 ev = self._last_event()
                 self.assertNotIn("shot", ev)
                 self.assertNotIn("focusAgo", ev)
                 self.assertEqual(len(self.grabbed), n + 1)
-                self.assertTrue(C.live_dm_shot_bytes(5050, ev["id"]).endswith(b"GRAB\xff\xd9"))
+                self.assertTrue(C.live_dm_shot_bytes(2, ev["id"]).endswith(b"GRAB\xff\xd9"))
 
     def test_vod_untouched(self):
         C.push_user_danmaku("录播", None, {"film": "nope", "t": 3}, base64.b64encode(JPG).decode())

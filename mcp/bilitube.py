@@ -103,7 +103,7 @@ TOOLS = [
           "play_now：立刻切过去，会打断用户，只在用户明说现在就看时用；不进稍后再看。"
           "card：往聊天里发一张推荐卡，点开进 bilitube。",
           ("danmaku", "queue", "play_now", "card"),
-          {"ref": REF, "film": _s("danmaku：不给＝正在看的那部"), "t": _s("danmaku：发在第几秒，不给＝播放器此刻"),
+          {"ref": REF, "film": _s("danmaku：不给＝正在看的那部（直播也算）；直播 live:<房间号>，推送里带 :<id> 的照抄"), "t": _s("danmaku：发在第几秒，不给＝播放器此刻"),
            "text": _s("danmaku：弹幕内容；card：配文", maxLength=1000),
            "sub": _s("danmaku：默认 add", enum=["add", "list", "del"]),
            "id": _s("sub=del：弹幕 id（sub=list 里有）"),

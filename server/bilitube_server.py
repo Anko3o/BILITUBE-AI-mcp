@@ -774,6 +774,9 @@ def dm_say(text, author="companion", color=None, mode="scroll"):
     if not text:
         return None, "弹幕是空的"
     lw = live_watch_room()                    # TA 此刻开着直播页（直播页每两秒请求一次 /dm/say?live=）
+    if not lw and not watching():
+        h = live_hold_room()                  # 直播页十几秒没来问（网络在抖），片子也没在放：仍当 TA 在这间直播
+        lw = h[0] if h else None
     if not watching() and not lw:
         return None, "TA 没在看"
     author = "user" if str(author).lower() in ("user", "human") else "companion"
@@ -2040,6 +2043,8 @@ LIVE_SEEN_MAX = 3 * 3600              # 超过这么久没来要过地址，就�
 
 
 LIVE_WATCH_SEC = 6                    # 直播页每两秒请求 /api/dm/say?live=<房间>；6 秒内来过＝TA 此刻开着这间
+LIVE_HOLD_SEC = 45                    # 网络抖一下（切 Wi-Fi／流量）十几秒没来问：这么久之内仍当 TA「还在这间直播」，
+                                      # AI 回的弹幕照样进池子，页面连回来（两分钟内）就飘；过了就明说没发出去，不改投别的片子
 LIVE_DM_SHOT_SEC = 120                # TA 在直播里发弹幕后两分钟内，look film=live:<房间> 默认给 TA 发弹幕那一刻存的三帧
 _live_dm_last = {}                    # {room: (存下的时刻, 那条弹幕的 id)}
 
@@ -2070,6 +2075,33 @@ def live_watch_room():
     if s.get("room") and time.time() - (s.get("poll") or 0) < LIVE_WATCH_SEC:
         return int(s["room"])
     return None
+
+
+def live_hold_room():
+    """TA 刚才还开着的直播间（直播页 LIVE_HOLD_SEC 秒内来问过）：(房间号, 几秒没来问了) 或 None。网络抖一下不算走开。"""
+    with _lock:
+        s = dict(_live_seen)
+    if s.get("room") and s.get("poll"):
+        ago = time.time() - s["poll"]
+        if ago < LIVE_HOLD_SEC:
+            return int(s["room"]), int(ago)
+    return None
+
+
+LIVE_FID_RE = re.compile(r"(?i)live:(\d{1,12})(?::[0-9a-z]{1,20})?")
+
+
+def live_fid(raw):
+    """live:<房间> 或推送里带弹幕 id 的 live:<房间>:<id> → 'live:<真房间号>'；不是直播回 None。只查缓存，不出门。"""
+    m = LIVE_FID_RE.fullmatch(str(raw or "").strip())
+    if not m:
+        return None
+    room = int(m.group(1))
+    with _lock:
+        c = _live_room.get(room)
+    if c and c[1].get("room"):
+        room = int(c[1]["room"])
+    return f"live:{room}"
 
 
 def live_title(fid):
@@ -3750,16 +3782,30 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/notes", "/api/dm/companion"):
                 fid = (body.get("film") or q.get("film", [""])[0]
                        or state_snapshot().get("film") or "")
-                if path == "/api/dm/companion" and re.fullmatch(r"live:\d{1,12}", str(fid)):
-                    # AI 在直播里回 TA：记进同一份记录（没有时间码），TA 开着这间就当场飘过
-                    rec, err = companion_dm(str(fid), 0, body.get("text"), via="dm")
+                if path == "/api/dm/companion" and not (body.get("film") or q.get("film", [""])[0]) and not watching():
+                    h = live_hold_room()              # 没给 film、片子没在放、TA 刚才还开着直播：回的是直播，不是上一部片子
+                    if h:
+                        fid = f"live:{h[0]}"
+                lfid = live_fid(fid) if path == "/api/dm/companion" else None
+                if lfid:
+                    # AI 在直播里回 TA：记进同一份记录（没有时间码），TA 开着这间就当场飘过。
+                    # 推送里的 live:<房间>:<id> 也认；TA 的直播页没连着就明说没发出去，不记、不改投别的片子
+                    room = int(lfid[5:])
+                    h = live_hold_room()
+                    if live_watch_room() != room and not (h and h[0] == room):
+                        with _lock:
+                            s = dict(_live_seen)
+                        ago = int(time.time() - s["poll"]) if s.get("room") == room and s.get("poll") else None
+                        why = (f"TA 的直播页这会儿没连上（{ago} 秒没来问了），没发出去" if ago is not None and ago < LIVE_SEEN_MAX
+                               else "TA 这会儿没开着这间直播，没发出去")
+                        return self._send(409, {"ok": False, "error": why, "live": True, "film": lfid})
+                    rec, err = companion_dm(lfid, 0, body.get("text"), via="dm")
                     if err:
                         return self._err(400, err)
-                    pooled = live_watch_room() == int(str(fid)[5:])
-                    if pooled:
-                        dm_pool_put({"text": rec["text"], "author": "companion", "color": None, "mode": "scroll",
-                                     "film": rec["film"], "t": None, "log": True, "lid": rec["id"], "live": True})
-                    return self._send(200, {"ok": True, "danmaku": rec, "pooled": pooled, "live": True})
+                    dm_pool_put({"text": rec["text"], "author": "companion", "color": None, "mode": "scroll",
+                                 "film": rec["film"], "t": None, "log": True, "lid": rec["id"], "live": True})
+                    held = None if live_watch_room() == room else (h[1] if h else None)
+                    return self._send(200, {"ok": True, "danmaku": rec, "pooled": True, "live": True, "held": held})
                 f = resolve(fid)
                 if not f:
                     return self._err(404, "没有这部片子")

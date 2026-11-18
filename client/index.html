@@ -1652,7 +1652,7 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     var v = $("v");
     if (cur && !v.paused) { try { v.pause(); } catch (e) {} }   // 点播那部停在这一秒
     liveStop(true);
-    live = { room: info.room, info: info, qn: liveQnPref(), seq: 0, tries: [], i: 0 };
+    live = { room: info.room, info: info, qn: liveQnPref(), seq: 0, tries: [], i: 0, openedAt: Date.now() };
     plOpen(false); dmPanelOpen(false); dmStop();
     $("player").hidden = true; $("live").hidden = false;
     $("liveTitle").textContent = info.title || ("直播间 " + info.room);
@@ -1887,18 +1887,27 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
   // 两个人的弹幕：直播页两秒问一次 api/dm/say?live=<房间>（顺便告诉后端「此刻开着这间」），属于这间房的当场走居中慢道飘。
   // 点播那边的 saySpawn 不接直播的条目。
   var liveSaySince = 0, liveSayTimer = 0, liveSayReady = false, liveDmQ = [], liveDmBusy = false, liveDmGen = 0;
+  // 网络一抖（切 Wi-Fi／流量那会儿）回信会晚到、成摞地到、先发的后到：
+  // 上一问没回就先不发新的（最多等 LIVE_SAY_HANG 毫秒），回来的若比已经用过的那封还旧就扔掉——游标不往回走，同一批公开弹幕不重飘。
+  var LIVE_SAY_HANG = 8000, liveSayBusy = 0, liveSayRq = 0, liveSayDone = 0;
   function liveSayPoll() {
     var L = live;
     if (!L || !liveSayReady) return;
+    if (liveSayBusy && Date.now() - liveSayBusy < LIVE_SAY_HANG) return;
+    var rq = ++liveSayRq;
+    liveSayBusy = Date.now();
     get("/dm/say?since=" + liveSaySince + "&live=" + encodeURIComponent(L.room) + "&ls=1" + (dmS.on ? "&pub=" + ldmSince : "")).then(function (d) {
-      if (live !== L || !d) return;
+      if (rq === liveSayRq) liveSayBusy = 0;
+      if (live !== L || !d || rq < liveSayDone) return;
+      liveSayDone = rq;
       if (d.shotReq) lshotAnswer(L, d.shotReq);            // AI 要看一眼：回一张眼前这一刻的三帧
       if (d.pub) ldmFeed(d.pub);                           // 直播间的公开弹幕（关了公开弹幕就不要）
-      if (typeof d.last === "number" && d.last > liveSaySince) {
+      if (typeof d.last === "number" && d.last < liveSaySince) liveSaySince = 0;   // 后端重启过，池子编号从头数：下一问把新的全取回来
+      else if (typeof d.last === "number" && d.last > liveSaySince) {
         (d.list || []).forEach(function (rec) { if (rec.film === "live:" + L.room) { liveDmEmit(rec); bDmSoon(); } });
         liveSaySince = d.last;
       }
-    }).catch(function () {});
+    }).catch(function () { if (rq === liveSayRq) liveSayBusy = 0; });
   }
   function liveSayStart() {
     var L = live;
@@ -1912,7 +1921,7 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     liveSayTimer = setInterval(liveSayPoll, 2000);
   }
   function liveSayStop() {
-    clearInterval(liveSayTimer); liveSayTimer = 0; liveSayReady = false; liveSaySince = 0;
+    clearInterval(liveSayTimer); liveSayTimer = 0; liveSayReady = false; liveSaySince = 0; liveSayBusy = 0; liveSayDone = liveSayRq;
     liveDmQ = []; liveDmBusy = false; liveDmGen++;
     $("liveDm").innerHTML = "";
   }
@@ -3394,6 +3403,9 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
   // 聊得多的片子这张单子会很长，把简介、评论区顶远：默认只露最近发的 BDM_FOLD 条（按发送先后挑，排法不变），
   // 底下一行「展开全部 N 条」，再点收起；新飘进来的那条总在露出的几条里。每次换片 / 进来都从折叠开始。
   var BDM_FOLD = 3, bDmOpen = false, bDmLast = null;
+  // 直播的片子号只按房间记（live:<房间>），不分哪一场：这里只列「这一场」的——这次打开直播页往前 LIVE_DM_HOURS 小时内发的。
+  // 旧的不删，「一起聊过的片」里照样翻得到。想改窗口就改这个数。
+  var LIVE_DM_HOURS = 6;
   function bDmFilm() { return bLiveOn() ? "live:" + live.room : (cur ? cur.id : ""); }
   function bDmSoon() { clearTimeout(bDmTimer); bDmTimer = setTimeout(bDmLoad, 600); }
   function bDmLoad() {
@@ -3417,7 +3429,11 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     items.sort(isLive
       ? function (a, b) { return (a.at || "") < (b.at || "") ? -1 : (a.at || "") > (b.at || "") ? 1 : 0; }
       : function (a, b) { return (a.t || 0) - (b.t || 0) || ((a.at || "") < (b.at || "") ? -1 : 1); });
-    if (isLive && items.length > 40) items = items.slice(-40);
+    if (isLive) {
+      var cut = ((live && live.openedAt) || Date.now()) - LIVE_DM_HOURS * 3600e3;
+      items = items.filter(function (x) { var ms = Date.parse(String(x.at || "").replace(/Z?$/, "Z")); return !isNaN(ms) && ms >= cut; });
+      if (items.length > 40) items = items.slice(-40);
+    }
     blk.hidden = !items.length;
     bDmLast = { items: items, isLive: isLive };
     var keyOf = function (it) { return it.id || ((it.at || "") + "|" + it.text); };

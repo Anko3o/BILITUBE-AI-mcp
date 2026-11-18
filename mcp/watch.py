@@ -366,26 +366,53 @@ def act_sub(args):
 
 # ── stage danmaku ──
 
+LIVE_FILM_RE = re.compile(r"(?i)live:(\d{1,12})(?::[0-9a-z]{1,20})?")
+
+
+def dm_film(args, d):
+    """弹幕落在哪：(film, 错误)。推送里的 live:<房间>:<id> 收成 live:<房间>；没给 film 时，
+    TA 这会儿（或网络抖之前）开着直播、而且比片子更近，就是那间直播——不悄悄落到上一部片子上。"""
+    f = str(args.get("film") or "").strip()
+    lv = (d or {}).get("live") or None
+    m = LIVE_FILM_RE.fullmatch(f)
+    if m:
+        return "live:" + m.group(1), None
+    if f.lower() == "live" or f == "直播":
+        return ("live:%s" % lv["room"], None) if lv else (None, "TA 最近没开过直播间；要回哪间就给 film=live:<房间号>")
+    if f:
+        return f, None
+    film_idle = (d or {}).get("idleMs") if (d or {}).get("film") else None
+    if lv and (lv.get("watching") or film_idle is None or lv.get("agoSec", 1e9) * 1000 < film_idle):
+        return "live:%s" % lv["room"], None
+    if not (d or {}).get("film"):
+        return None, "TA 还没在 bilitube 播放页开过片子。"
+    return d["film"], None
+
+
 def act_dm(args):
     """私人弹幕：sub=add 在 t 发一条（只出现在 bilitube 播放页上，不发去 B 站），list 列两人的，del 删自己的一条。"""
-    now, err = current()
-    if err and not args.get("film"):
+    now = api("/now")
+    if "_error" in now:
+        return f"❌ {now['_error']}"
+    film, err = dm_film(args, now)
+    if err:
         return f"❌ {err}"
-    film = pick_film(args, now)
     sub = str(args.get("sub") or ("add" if args.get("text") else "list")).strip()
     if sub == "add":
         text = str(args.get("text") or "").strip()
         if not text:
             return "❌ 弹幕不能是空的"
-        t = pick_t(args, now)
+        is_live = film.startswith("live:")
+        t = 0 if is_live else pick_t(args, now)
         d = api("/dm/companion", payload={"film": film, "t": t, "text": text})
         if "_error" in d:
-            return f"❌ {d['_error']}"
+            return f"❌ {d['_error']}" + ("（直播的弹幕没改投别的片子）" if is_live else "")
         r = d.get("danmaku") or {}
         if d.get("live"):
-            return (f"已发：{r.get('text')}（id {r.get('id')}）" +
-                    ("——TA 正开着这间直播，已经出现在 TA 的播放页上。" if d.get("pooled")
-                     else "——记下了，但 TA 这会儿没开着这间直播，播放页上没出现。"))
+            if d.get("held") is not None:
+                return (f"发进直播 {film} 了：{r.get('text')}（id {r.get('id')}）——但 TA 的直播页 {d['held']} 秒没连上，"
+                        "多半网络在抖：两分钟内连回来就会飘过，连不回来就只留在这间直播的记录里。")
+            return f"发进直播 {film} 了：{r.get('text')}（id {r.get('id')}）——TA 正开着这间，已经出现在 TA 的播放页上。"
         out = f"发在 {fmt_t(r.get('t'))} 了：{r.get('text')}（id {r.get('id')}）"
         if r.get("cut"):
             out += "\n（太长，截到 140 字了）"
