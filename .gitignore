@@ -1,0 +1,10 @@
+# 运行时数据：登录凭据、暂停标记、缓存、截图、设置、私人弹幕……一律不进仓库
+data/
+mcp/state/
+mcp/config.json
+*.env
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store

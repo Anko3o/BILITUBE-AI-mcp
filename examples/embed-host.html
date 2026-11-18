@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- 最小的宿主页示例：把 bilitube 装进一个手机小窗大小的 iframe，看嵌入模式长什么样、postMessage 都说了什么。
+     必须和 bilitube 同源（页面只认同源消息）：最省事是拷进 client/ 旁边，打开 <前缀>/embed-host.html；
+     放在别处就用 ?src= 指过去，比如 embed-host.html?src=/bilitube/browse/%3Fembed%3D1
+     （直接在浏览器里打开带 ?embed=1 的地址是普通版，窄版只在 iframe 里出现。） -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bilitube 嵌入示例</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f4; --ink: #222; --line: #ccc; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --ink: #ddd; --line: #444; } }
+  body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, sans-serif; }
+  .bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; }
+  /* 小窗：头上一行片名＋返回、设置；iframe 的高度跟着页面报的 bilitube:size 走，最矮一块 16:9 的画面，最高半屏，再高就在小窗里面滚 */
+  .win { width: 100%; max-width: 380px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .win-head { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 4px 0 12px; }
+  .win-title { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .win-head button { width: 30px; height: 30px; padding: 0; border: 0; display: grid; place-items: center; }
+  .win-head button[hidden] { display: none; }
+  .win-head svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  iframe { display: block; width: 100%; height: 420px; border: 0; border-top: 1px solid var(--line); }
+  /* 「弹幕飘出画面」：页面把弹幕递出来（bilitube:dm），这里在小窗下面这一块整宽地飘。最简单的一版，照着改成你自己的 */
+  #fly { position: relative; height: 150px; margin-top: 8px; overflow: hidden; border: 1px dashed var(--line); border-radius: 12px; }
+  #fly:empty::before { content: "「弹幕飘出画面」打开后，弹幕在这一块飘"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; opacity: .5; }
+  #fly span { position: absolute; left: 100%; white-space: nowrap; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,.35); will-change: transform; }
+  #now { margin: 8px 0 0; font-size: 12px; opacity: .75; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="grab">要一帧画面</button>
+</div>
+<div class="win">
+  <div class="win-head">
+    <span class="win-title" id="title">bilitube</span>
+    <!-- 放片时才露：返回（回逛片页）、设置（拉起播放页的抽屉：稍后再看、弹幕设置都在里面）。逛片页自己顶栏有「我的」和设置，这两颗不露 -->
+    <button data-cmd="back" aria-label="返回" title="返回" hidden><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button data-cmd="more" aria-label="设置" title="设置" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+  </div>
+  <iframe id="f" allow="autoplay; fullscreen"></iframe>
+</div>
+<div id="fly"></div>
+<p id="now">（还没收到消息）</p>
+<script>
+  var q = new URLSearchParams(location.search);
+  var f = document.getElementById("f"), now = document.getElementById("now"), title = document.getElementById("title");
+  var ask = 0;
+  // 页面报来的内容高度（bilitube:size）：最矮 16:9 的画面，最高半屏（且不超过 560px）；内容更高时页面在 iframe 里面自己滚
+  function fit() {
+    var min = Math.round(f.clientWidth * 9 / 16), max = Math.min(560, Math.round(innerHeight * 0.5));
+    f.style.height = Math.max(min, Math.min(max, ask || min)) + "px";
+  }
+  addEventListener("resize", fit);
+  function paint(d) {
+    var on = !!(d && d.film);
+    title.textContent = on ? d.film : "bilitube";       // bilitube:now 的 film 就是片名（直播是「直播 · 标题」）
+    title.title = on ? d.film : "";
+    document.querySelectorAll(".win-head [data-cmd]").forEach(function (b) { b.hidden = !on; });
+  }
+  f.src = q.get("src") || "./browse/?embed=1";
+  function send(m) { f.contentWindow.postMessage(m, location.origin); }
+  document.querySelectorAll("[data-cmd]").forEach(function (b) {
+    b.onclick = function () { send({ type: "bilitube:cmd", cmd: b.dataset.cmd }); };
+  });
+  document.getElementById("grab").onclick = function () { send({ type: "bilitube:grab", rid: String(Date.now()) }); };
+  // 飘一条：item = {text, color, size, speed, lane}。lane:"home" 是你们两个人的，走中间、慢一点；其余是 B 站的公共弹幕
+  var fly = document.getElementById("fly"), lane = 0;
+  function flyOne(it) {
+    if (fly.childElementCount > 60) return;                    // 太密就丢，别把页面拖慢
+    var el = document.createElement("span"), home = it.lane === "home";
+    el.textContent = String(it.text || "");
+    el.style.color = it.color || "inherit";
+    el.style.fontSize = Math.round(14 * (Number(it.size) || 1)) + "px";
+    el.style.top = (home ? 62 : 6 + (lane++ % 5) * 24 + (lane % 5 >= 2 ? 34 : 0)) + "px";
+    fly.appendChild(el);
+    var dist = fly.clientWidth + el.offsetWidth, ms = (home ? 11000 : 8000) / (Number(it.speed) || 1);
+    var an = el.animate([{ transform: "translateX(0)" }, { transform: "translateX(-" + dist + "px)" }], { duration: ms, easing: "linear" });
+    an.onfinish = function () { el.remove(); };
+  }
+  window.addEventListener("message", function (ev) {
+    if (ev.origin !== location.origin || ev.source !== f.contentWindow) return;
+    var d = ev.data || {};
+    if (d.type === "bilitube:size") { ask = Number(d.h) || 0; fit(); }
+    else if (d.type === "bilitube:now") { paint(d); now.textContent = "bilitube:now  " + (d.film ? d.film + "  " + Math.round(d.t || 0) + "s  " + (d.playing ? "播放中" : "停着") : "没在放"); }
+    else if (d.type === "bilitube:dm") { if (d.clear) fly.textContent = ""; else if (d.item) flyOne(d.item); }
+    else if (d.type === "bilitube:frame") now.textContent = "bilitube:frame  " + (d.ok ? "拿到了一帧" : "被回绝（「发消息时带画面」关着，或者没在放）");
+  });
+</script>
+</body>
+</html>

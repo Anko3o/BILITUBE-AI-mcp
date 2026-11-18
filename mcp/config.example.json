@@ -1,0 +1,12 @@
+{
+  "pocket_folder_id": null,
+  "hourly_budget": 30,
+  "rest_hourly_budget": 0,
+  "write_hourly_budget": 20,
+  "later_hourly_budget": 20,
+  "later_min_gap_s": 30,
+  "follow_group_id": null,
+  "follow_group_name": "AI 的关注",
+  "follow_hourly_budget": 5,
+  "follow_min_gap_s": 60
+}

@@ -1,0 +1,94 @@
+bilitube — 第三方代码、借鉴来源与许可
+=====================================
+
+本仓库自己的代码按 LICENSE（CC BY-NC-SA 4.0）发布。下面这些部分各有各的来源和许可。
+
+
+1. eryu（耳屿）— CC BY-NC-SA 4.0
+   https://github.com/sebastianevan200-stack/eryu  © Evelyn & River
+   client/browse/（逛片页）的外壳（顶栏、底栏、设置卡、按压手感、过渡动画、皮肤变量名），
+   以及 client/index.html 播放页里的抽屉（.ly-sheet）和进场动效，照 eryu 系播放器的 client/index.html 改写（有改动）。
+   依 ShareAlike 条款，这些部分以同一许可（CC BY-NC-SA 4.0）发布，禁止商用。
+
+
+2. dsh-bili-humanism — MIT
+   https://github.com/InariNGT-Ofiicial/dsh-bili-humanism
+   Copyright (c) 2026 InariNGT-Ofiicial
+
+   借的是做法和两张小表，没有搬代码（那边是 Node，这边是 Python 重写）：
+   - mcp/server/guard.py：风控信号表（HTTP 401/403/412/429；code -352/-412/-509/-403；v_voucher；验证码字样）、
+     撞了就持久暂停、POST 只放行写死的路径、只对传输错误重试且写操作不重试（参考 lib/network.mjs）；
+     按次数计的请求预算（参考 lib/budget.mjs）。
+   - mcp/server/bili.py：收藏前现查夹子 attr&1 核对私密、按 fav_state 判断已在不在（参考 lib/writer.mjs）；
+     字幕只走 WBI 签名的 /x/player/wbi/v2 并核对回来的 bvid/cid/aid（参考 lib/reader.mjs 与其 README 的 A1 说明）。
+
+   MIT License
+
+   Copyright (c) 2026 InariNGT-Ofiicial
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+
+3. Lucide — ISC License
+   https://lucide.dev  （client/browse/icons.js 里注明的那些，和 client/index.html 里的线描图标）
+   Copyright (c) Lucide Contributors 2022
+   Portions of this software are licensed as follows (Feather):
+   Copyright (c) 2013-2022 Cole Bemis — MIT License
+
+   ISC License
+
+   Permission to use, copy, modify, and/or distribute this software for any
+   purpose with or without fee is hereby granted, provided that the above
+   copyright notice and this permission notice appear in all copies.
+
+   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+   WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+   MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+   ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
+4. Feather Icons — MIT License
+   https://feathericons.com  Copyright (c) 2013-2017 Cole Bemis
+   client/browse/icons.js 里的 home、x 两枚与 Feather 的 home / x 逐字相同（经 eryu 转手）。
+   其余图标都出自 lucide-static 0.460.0（见第 3 节），已逐枚和原文比对。
+   MIT 许可正文同第 2 节（版权行换成 Cole Bemis）。
+
+
+5. hls.js 1.7.3 — Apache License 2.0
+   https://github.com/video-dev/hls.js
+   Copyright (c) 2017 Dailymotion (http://www.dailymotion.com)
+   其中 mp4-generator / exp-golomb 两部分来自 videojs-contrib-hls：Copyright (c) 2013-2015 Brightcove（同为 Apache 2.0）
+   client/hls.light.min.js 与 npm 发布的 hls.js@1.7.3 dist 文件逐字节相同；
+   该项目 LICENSE 原文和 Apache 2.0 全文见 client/hls.LICENSE.txt。
+
+
+6. mpegts.js 1.7.3 — Apache License 2.0
+   https://github.com/xqq/mpegts.js
+   Copyright (C) 2016 Bilibili（源码文件头）；Copyright (C) 2021 magicxqq（README）
+   client/mpegts.min.js 是 npm 发布的 mpegts.js@1.7.3 的 dist/mpegts.js 去掉末尾 sourceMappingURL 一行，其余逐字节相同；
+   许可全文（与该项目 v1.7.3 的 LICENSE 一致）见 client/mpegts.LICENSE.txt。
+
+
+7. 运行时依赖（不随仓库分发）
+   requests（Apache 2.0）、segno（BSD-3-Clause，可选，画扫码二维码）、ffmpeg（LGPL/GPL，抓帧、直播截图用，系统自带）。
+
+B 站（bilibili）是上海幻电信息科技有限公司的商标。本项目与 B 站没有任何关系，只调用它公开的网页接口。

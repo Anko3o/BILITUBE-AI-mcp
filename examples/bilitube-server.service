@@ -1,0 +1,14 @@
+# systemd 示例：bilitube 后端。路径和用户按你的机器改。
+[Unit]
+Description=bilitube server
+After=network-online.target bilitube-mcp.service
+
+[Service]
+User=bilitube
+WorkingDirectory=/path/to/bilitube
+EnvironmentFile=-/path/to/bilitube/examples/bilitube.env
+ExecStart=/usr/bin/python3 server/bilitube_server.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

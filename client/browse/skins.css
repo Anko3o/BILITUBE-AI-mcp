@@ -1,0 +1,172 @@
+/* ── 皮肤：两套，共用一个日夜开关（html[data-theme=light|dark]）。
+   黑白＝html[data-skin=bw]（默认）：纯黑白，不垫底图，不用毛玻璃和阴影。
+   自定义＝html[data-skin=custom]：底色和黑白一样，另加两样——
+     ① 主题色 --key（在设置里挑，app.js 的 setAccent 写到 <html> 上），只用在选中的标签、底栏当前页、主要按钮、时间钮和链接上；
+     ② 自传的底图（#skin-bg，有图时 <html> 带 data-bg="own"），这时区块变透明，只给托字的行和卡垫一层淡底（规则在 app.css 末尾）。
+   设置卡、弹出卡这类面板在两套皮下都是黑白的样子，不跟主题色。
+   变量名沿用 eryu 的 client/index.html；app.css 只读这些变量，不写死颜色。 ── */
+:root {
+  --ink: #111111; --ink-soft: #4a4a4a; --muted: #8c8c8c; --faint: #c9c9c9;
+  --rose-deep: #111111;                     /* 顶栏圆钮里的图标色（变量名沿用 eryu） */
+  --accent: #111111; --accent-soft: #6b6b6b;
+  --btn: #111111; --btn-ink: #ffffff;       /* 面板里的实心小钮：永远黑（夜里白），不跟主题色 */
+  --key: var(--btn); --key-ink: var(--btn-ink);   /* 主题色：没挑过＝和按钮一样的黑/白 */
+  --good: #4d9b7b;
+  --bad: #d96a5e;
+  --paper: #ffffff;                         /* 内容块、卡片 */
+  --seam: #f4f4f4;                          /* 页底和块之间的灰缝；面板里的行 */
+  --milk: #f5f5f5; --milk-strong: #ffffff;  /* 按下态、加载骨架、小胶囊 */
+  --line: #e8e8e8; --hairline: #ececec;
+  --cv-bg: #f0f0f0;                         /* 封面没加载出来时 */
+  --rose-rgb: 17, 17, 17; --rose-deep-rgb: 17, 17, 17;
+  --pop-rgb: 17, 17, 17; --on-pop: #ffffff; /* 提示条的底与字 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  --r-s: 12px; --r-m: 20px; --r-full: 999px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  color-scheme: light;
+
+  /* ── 运动体系 ──
+     只动 transform 和 opacity：这两个走合成器，不触发布局。
+     时长全部收在这四个变量里，调一处全站跟着走。 */
+  --ease-out:    cubic-bezier(.16, 1, .3, 1);      /* ≈ expo.out：猛起步、极缓收尾，主力 */
+  --ease-in-out: cubic-bezier(.87, 0, .13, 1);     /* ≈ expo.inOut：转场用，两头都稳 */
+  --ease-spring: cubic-bezier(.22, 1.12, .44, 1);  /* 轻微过冲，按压回弹用 */
+  --ease-press:  cubic-bezier(.4, 0, .2, 1);       /* 按下去要跟手，这条不能慢 */
+
+  --t-press: .12s;   /* 按下：必须即时 */
+  --t-fast:  .3s;    /* 小元件：胶囊、图标、勾选 */
+  --t-base:  .55s;   /* 主力：入场、卡片、封面 */
+  --t-slow:  .9s;    /* 大转场 */
+  --stagger: 42ms;   /* 列表逐行错开的间隔 */
+}
+
+
+/* ── 夜间：两套皮共用 ── */
+html[data-theme="dark"] {
+  --ink: #f2f2f2; --ink-soft: #b4b4b4; --muted: #7d7d7d; --faint: #3c3c3c;
+  --rose-deep: #f2f2f2;
+  --accent: #ffffff; --accent-soft: #a0a0a0;
+  --btn: #f2f2f2; --btn-ink: #0a0a0a;
+  --paper: #141414; --seam: #000000;
+  --milk: #222222; --milk-strong: #1a1a1a;
+  --line: #262626; --hairline: #1f1f1f;
+  --cv-bg: #1e1e1e;
+  --rose-rgb: 242, 242, 242; --rose-deep-rgb: 242, 242, 242;
+  --pop-rgb: 242, 242, 242; --on-pop: #0a0a0a;
+  color-scheme: dark;
+}
+input { color: var(--ink); }
+input::placeholder { color: var(--muted); }
+
+/* ── 自定义皮的底图：只有传了图（html[data-bg=own]，app.js 只在自定义皮下加）才显示。
+   设置里「背景填充」控制 --bg-show（底图的不透明度，透出来的是素底 --paper），「背景模糊」控制 --bg-blur。
+   --wash 是盖在图上的一层很薄的白（夜间为黑）纱，让没垫底的字（名字、数字、宫格）在花哨的图上也看得清；
+   --film 是托字的行和卡共用的那层淡底。两者的浓淡都只在这里调。 ── */
+html[data-skin="custom"] {
+  --wash-a: 0.16; --wash: rgba(255, 255, 255, var(--wash-a));
+  --film-a: 0.58; --film: rgba(255, 255, 255, var(--film-a));
+  --film-2: rgba(255, 255, 255, calc(var(--film-a) + 0.2));   /* 叠在 --film 上的按钮、按下态 */
+  --chip-a: 0.7; --chip: rgba(255, 255, 255, var(--chip-a));   /* 顶栏两颗圆钮和搜索条：直接浮在图上，白天白、夜间黑 */
+}
+html[data-skin="custom"][data-theme="dark"] {
+  --wash-a: 0.55; --wash: rgba(0, 0, 0, var(--wash-a));
+  --film-a: 0.42; --film: rgba(0, 0, 0, var(--film-a));
+  --film-2: rgba(0, 0, 0, calc(var(--film-a) + 0.12));
+  --chip-a: 0.5; --chip: rgba(0, 0, 0, var(--chip-a));
+}
+/* 灰字直接落在图上容易看不清：有底图时，页面内容（#app，不含弹出面板）的次要文字颜色加深一档 */
+html[data-bg="own"] #app { --ink-soft: #333333; --muted: #6a6a6a; }
+html[data-bg="own"][data-theme="dark"] #app { --ink-soft: #d6d6d6; --muted: #ababab; }
+#skin-bg {
+  position: fixed; inset: -40px; z-index: 0; pointer-events: none; display: none;
+  background: center / cover no-repeat;
+  filter: blur(var(--bg-blur, 14px)); transform: scale(1.08);   /* 放大一点，糊开的边不露白 */
+  opacity: var(--bg-show, 1);
+}
+html[data-bg="own"] #skin-bg { display: block; }
+#skin-bg::after { content: ""; position: absolute; inset: 0; background: var(--wash, transparent); }
+.hs-range { flex: 1; min-width: 0; accent-color: var(--btn); height: 28px; }
+
+/* ── 设置卡里的行：实底，无描边、无阴影、无毛玻璃 ── */
+.home-settings { margin: 10px 14px 4px; display: flex; flex-direction: column; gap: 8px; }
+.hs-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--seam); border: 0; border-radius: 16px;
+}
+.hs-label { font-size: 11.5px; font-weight: 600; color: var(--accent); letter-spacing: 0.18em; flex-shrink: 0; }
+.hs-val { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-sec { margin: 14px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: var(--muted); }
+.hs-input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: none; border-bottom: 1px solid var(--hairline); padding: 4px 2px; outline: none; }
+@media (pointer: coarse) { .hs-input { font-size: 16px; } }   /* iPhone：输入框字号小于 16px，点进去整页会自己放大 */
+.hs-input:focus { border-bottom-color: var(--accent); }
+.hs-avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex-shrink: 0; background: var(--milk-strong); border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); cursor: pointer; }
+.hs-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hs-btn {
+  background: var(--btn); color: var(--btn-ink); border: none; border-radius: var(--r-full);
+  padding: 7px 14px; font-size: 12px; font-weight: 600; flex-shrink: 0;
+}
+.hs-btn.on { background: var(--btn); color: var(--btn-ink); }
+.hs-btn-quiet { background: var(--paper); color: var(--ink-soft); border: 0; }
+.hs-seg { display: flex; gap: 6px; margin-left: auto; }
+.hs-seg .hs-btn { display: inline-flex; align-items: center; gap: 5px; }
+.skin-swatches { display: flex; gap: 10px; flex: 1; justify-content: flex-end; }
+.skin-sw {
+  width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--faint); padding: 0; position: relative;
+  transition: transform var(--t-fast) var(--ease-spring), box-shadow var(--t-fast) var(--ease-out);
+}
+.skin-sw[data-skin="bw"] { background: #ffffff; box-shadow: inset 0 0 0 6px #111111; }   /* 黑白：白芯黑圈 */
+.skin-sw[data-skin="bw"].active { box-shadow: inset 0 0 0 6px #111111, 0 0 0 2px var(--btn); }
+.skin-sw[data-skin="custom"] { background: conic-gradient(from 200deg, #ffd6e4, #fff3cf, #cfe8ff, #e9d6ff, #ffd6e4); }
+.skin-sw.active { transform: scale(1.12); box-shadow: 0 0 0 2px var(--btn); }
+.skin-sw.active::after {
+  content: '✓'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 13px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* ── 设置卡、扫码卡：两套皮下都是白卡（夜间黑卡），不跟主题色，不加阴影和毛玻璃 ── */
+.qr-sheet {
+  position: fixed; inset: 0; z-index: 9200; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  animation: sheetIn var(--t-fast) var(--ease-out);
+}
+@keyframes sheetIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cardIn { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+.qr-sheet .qr-card { animation: cardIn var(--t-base) var(--ease-out); }
+.qr-sheet.hidden { display: none; }
+.qr-card {
+  width: min(320px, 90vw); background: var(--paper); border: 0; border-radius: 22px;
+  padding: 20px 18px 16px; text-align: center;
+}
+.qr-title { font-size: 11.5px; font-weight: 600; letter-spacing: 0.18em; color: var(--accent); }
+.qr-actions { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.qr-actions button {
+  font: inherit; font-size: 12px; border-radius: var(--r-full); padding: 7px 14px;
+  border: 0; background: transparent; color: var(--ink-soft);
+}
+.qr-actions button.primary { background: var(--btn); color: var(--btn-ink); }
+.set-card { text-align: left; }
+.set-card .qr-title { text-align: center; margin-bottom: 12px; }
+.set-card .home-settings { margin: 0; }
+.set-card .hs-row { margin-top: 8px; }
+.set-card .qr-actions { margin-top: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-press: 0s; --t-fast: 0s; --t-base: 0s; --t-slow: 0s; --stagger: 0ms; }
+}
+
+/* ── 嵌入模式（html[data-embed]，?embed=1）：黑白皮的白天换一组更柔和的浅色，便于和宿主聊天页搭配——
+   灰缝和按下态用浅粉（#FAEEF5 / #F9DCEC），选中和实心按钮用玫瑰色 #D9A3BD，文字用暖灰（#6F6E71 一族）。
+   夜间仍是黑白；自定义皮不改（以用户自己挑的主题色和底图为准）。播放页（client/index.html）的嵌入模式用的是同一组色值。
+   想让嵌入时也保持纯黑白，删掉下面这两段即可。 ── */
+html[data-embed][data-skin="bw"]:not([data-theme="dark"]) {
+  --ink: #57555a; --ink-soft: #6f6e71; --muted: #8c8b8e; --faint: #b0afb1;
+  --rose-deep: #6f6e71; --accent: #6f6e71; --accent-soft: #8c8b8e;
+  --btn: #d9a3bd; --btn-ink: #ffffff;
+  --key: #d9a3bd; --key-ink: #ffffff;
+  --seam: #faeef5; --milk: #faeef5; --milk-strong: #f9dcec;
+  --line: #f3e3ec; --hairline: #f6e9f0; --cv-bg: #faeef5;
+  --rose-rgb: 111, 110, 113; --rose-deep-rgb: 111, 110, 113;
+  --pop-rgb: 111, 110, 113;
+}
+html[data-embed][data-theme="dark"] { --milk-strong: #222222; }

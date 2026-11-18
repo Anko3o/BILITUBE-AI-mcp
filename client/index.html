@@ -1,0 +1,3553 @@
+<!DOCTYPE html>
+<html lang="zh" data-ui="b">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- 直连：B 站 CDN 看见外站 Referer 会拒（有的节点直接 403），<video> 又没有自己的 referrerpolicy 属性，
+     所以整页不带 Referer。同源接口（api/）不看 Referer，不受影响。 -->
+<meta name="referrer" content="no-referrer">
+<title>bilitube</title>
+<script>
+/* 嵌入模式：宿主页面用 iframe 装这一页时带 ?embed=1（或 #embed）。和 browse/ 一样，只在确实装在 iframe 里时才认——
+   直接在浏览器里打开带 embed=1 的地址就是普通版（窄版没有返回钮，单独打开会走不出去）。
+   旗标只在开页时认一次，钉在 <html data-embed>；之后 open() 改 hash 也不会把它冲掉。 */
+(function () {
+  try {
+    if ((/[?&]embed=1(&|$)/.test(location.search) || location.hash === "#embed") && window.parent !== window) document.documentElement.dataset.embed = "1";
+  } catch (e) {}
+})();
+</script>
+<script>
+/* 开页前的分流和日夜。
+   · 没带片子（没有 ?film= 也没有 #片名）：这页没东西可放，直接换到逛片页 browse/（嵌入时换到 browse/?embed=1）。
+   · 从 browse/ 点进来的：把来处记进 sessionStorage，返回钮回到那一页。嵌入时不看 referrer，返回走 browse/ 自己记的页名。
+   · 日夜：bilitube_theme（在哪页点过都算）> 系统深浅色，挂在 <html data-ui-theme>。 */
+(function () {
+  var d = document.documentElement;
+  var q = null, ref = "";
+  try { q = new URLSearchParams(location.search); } catch (e) { return; }
+  var hasFilm = !!q.get("film") || (location.hash.length > 1 && location.hash !== "#embed");
+  if (!hasFilm) {
+    d.dataset.leaving = "1";
+    location.replace("browse/" + (d.dataset.embed === "1" ? "?embed=1" : ""));
+    return;
+  }
+  if (d.dataset.embed !== "1") {
+    try { var r = new URL(document.referrer); if (r.origin === location.origin && r.pathname.indexOf(location.pathname.replace(/[^\/]*$/, "") + "browse/") === 0) ref = r.href; } catch (e) {}
+  }
+  try { if (ref) sessionStorage.setItem("bilitube_ui_back", ref); } catch (e) {}
+  var t = null;
+  try { t = localStorage.getItem("bilitube_theme"); } catch (e) {}
+  if (t !== "dark" && t !== "light") t = (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  d.dataset.uiTheme = t;
+})();
+</script>
+<script>
+/* 嵌入模式的配色，两个方向（独立打开时不跑）：
+   · 往外：bilitube:skin 报这一刻在用的几样颜色（宿主拿去给装这一页的外框上色）；宿主发 bilitube:skin? 就再报一次。
+   · 往里：宿主发 bilitube:theme {vars} 递它自己的颜色，这里挂成 <html> 上的 --host-*，并标 data-skin-from="host"，
+     样式表「宿主递来的配色」那段把它们映射到页内变量；不带 vars 的 bilitube:theme 等于收回，换回自己的皮。
+   两个方向用同一组名字：panel 面板 / bg 底 / tile 色块 / tile2 深一档色块 / ink 主字 / ink2 次字 / ink3 小字 /
+   accent 强调 / accent2 强调字 / onAccent 强调块上的字 / line 分隔 / radius 圆角 / dark 是否夜间。
+   名字和 browse/ 报的那份对齐，宿主不用分是哪一页。 */
+(function () {
+  var d = document.documentElement;
+  if (d.dataset.embed !== "1" || window.parent === window) return;
+  var KEYS = ["panel", "bg", "tile", "tile2", "ink", "ink2", "ink3", "accent", "accent2", "onAccent", "line", "radius"];
+  var cssName = function (k) { return "--host-" + k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
+  var OUT = { panel: "--paper", bg: "--seam", tile: "--milk", tile2: "--milk-strong", ink: "--ink", ink2: "--ink-soft", ink3: "--muted",
+              accent: "--btn", accent2: "--ink", onAccent: "--btn-ink", line: "--line" };
+  function tell() {
+    try {
+      var cs = getComputedStyle(d), v = {};
+      for (var k in OUT) v[k] = cs.getPropertyValue(OUT[k]).trim();
+      v.radius = "14px";
+      v.dark = d.dataset.skinFrom === "host" ? d.dataset.hostTone === "dark" : d.dataset.uiTheme === "dark";
+      window.parent.postMessage({ type: "bilitube:skin", from: d.dataset.skinFrom || "own", vars: v }, location.origin);
+    } catch (e) {}
+  }
+  var raf = 0;
+  function tellSoon() { cancelAnimationFrame(raf); raf = requestAnimationFrame(tell); }
+  function applyHost(m) {
+    var v = m.vars || {};
+    KEYS.forEach(function (k) { if (v[k]) d.style.setProperty(cssName(k), String(v[k])); else d.style.removeProperty(cssName(k)); });
+    d.dataset.skinFrom = "host"; d.dataset.hostTone = v.dark ? "dark" : "light";
+    d.style.colorScheme = v.dark ? "dark" : "light";
+  }
+  function dropHost() {
+    KEYS.forEach(function (k) { d.style.removeProperty(cssName(k)); });
+    delete d.dataset.skinFrom; delete d.dataset.hostTone; d.style.colorScheme = "";
+  }
+  // 宿主把上一次递进来的那份记在 sessionStorage（同源同标签页共用），首帧就挂上，免得先闪一下自己的皮
+  try { var last = JSON.parse(sessionStorage.getItem("bilitube_host_theme") || "null"); if (last && last.vars) applyHost(last); } catch (e) {}
+  window.addEventListener("message", function (ev) {
+    if (ev.origin !== location.origin || ev.source !== window.parent) return;
+    var m = ev.data || {};
+    if (m.type === "bilitube:theme") { if (m.vars) applyHost(m); else dropHost(); tellSoon(); }
+    else if (m.type === "bilitube:skin?") tellSoon();
+  });
+  new MutationObserver(tellSoon).observe(d, { attributes: true, attributeFilter: ["data-ui-theme"] });
+  document.addEventListener("DOMContentLoaded", tellSoon);
+  window.addEventListener("load", tellSoon);
+})();
+</script>
+<style>
+/* 样式分两层：
+   ① 这一段是骨架——各个部件的排布、尺寸，以及画面上那几层（弹幕设置、稍后再看、小签）的默认样子；
+   ② 后面 html[data-ui="b"] 那一大段是外观——颜色、字、白块、抽屉。颜色变量全在那一段里定义，日夜看 data-ui-theme。
+   <html> 上的 data-ui="b" 是写死的，只是给第二层的选择器当前缀用。 */
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { min-height: 100%; }
+body { font-family: system-ui, sans-serif; line-height: 1.6; font-size: 15px; }
+.wrap { max-width: 780px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
+.spacer { flex: 1; }
+[hidden] { display: none !important; }
+
+/* ── 发弹幕那一行（私人弹幕）：贴在画面底下 ── */
+.say { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.say input {
+  flex: 1; min-width: 0; min-height: 36px; padding: 0 12px; font: inherit; font-size: 14px;
+  border: 1px solid var(--border-soft); border-radius: 11px; background: var(--card); color: var(--text);
+}
+.say button {
+  flex: none; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 999px; background: var(--accent-deep); color: #fff; cursor: pointer;
+  transition: transform .14s cubic-bezier(.23,1,.32,1), opacity .16s ease;
+}
+.say button:active { transform: scale(.94); }
+.say button:disabled { opacity: .45; cursor: default; }
+.say svg { width: 16px; height: 16px; }
+@media (pointer: coarse) { .say input { font-size: 16px; } }   /* iOS 小于 16px 会自己放大页面 */
+
+/* ── 画面 ── */
+.stage { position: relative; border-radius: 16px; overflow: hidden; background: var(--screen); box-shadow: 0 10px 28px var(--shadow); }
+video { display: block; width: 100%; max-height: 62vh; background: var(--screen); }
+/* AI 这会儿也开着这一幕时，右上角亮一会儿 */
+.badge {
+  position: absolute; top: 10px; right: 48px; display: none; align-items: center; gap: 6px;
+  padding: 6px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  background: rgba(28,20,30,.72); color: #f0e6f5; border: 1px solid rgba(175,155,212,.5);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.badge[data-on="1"] { display: flex; animation: pop .3s ease; }
+@keyframes pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+/* 放不了的时候（格式不支持、B 站不给放）画面那块换成一段说明 */
+.mkv { padding: 16px; color: #e8dbe6; font-size: 13.5px; line-height: 1.7; }
+.mkv code { display: block; margin-top: 8px; background: #ffffff14; border-radius: 8px; padding: 8px 10px; font-size: 11.5px; word-break: break-all; }
+
+/* ── 弹幕画布（B 站弹幕和两个人的弹幕画在同一块上）── */
+#dm { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.dm-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.dm-toggle input { width: 16px; height: 16px; accent-color: var(--accent-deep); }
+
+/* ── 稍后再看（B 站账号那份）：换片不退出 ── */
+.pl {
+  position: absolute; top: 8px; left: 8px; right: 8px; z-index: 6;
+  max-height: calc(100% - 16px); display: flex; flex-direction: column;
+  background: rgba(28,20,30,.93); color: #f0e6f5; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.4);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.pl[hidden] { display: none !important; }
+.pl-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 6px 6px; }
+.pl-row .cv { position: relative; overflow: hidden; }
+.pl-row .cv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.pl-sec { padding: 10px 8px 4px; font-size: 11px; opacity: .6; letter-spacing: .04em; }   /* 稍后再看底下那一小段「本地片」 */
+.pl-row {
+  display: flex; align-items: center; gap: 9px; padding: 5px 6px; border-radius: 9px; cursor: pointer;
+  -webkit-user-select: none; user-select: none; transition: background-color .16s ease, transform .14s cubic-bezier(.23,1,.32,1);
+}
+.pl-row:active { transform: scale(.985); }
+.pl-row[data-on="1"] { background: rgba(255,255,255,.12); }
+.pl-row .cv { flex: none; width: 56px; aspect-ratio: 16/9; border-radius: 6px; background: rgba(255,255,255,.08) center/cover no-repeat; }
+.pl-row .tx { flex: 1; min-width: 0; }
+.pl-row .t { font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-row .m { margin-top: 2px; font-size: 11px; opacity: .6; display: flex; gap: 7px; }
+.pl-row .m span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-row .x { flex: none; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 999px; background: transparent; color: inherit; opacity: .6; cursor: pointer; }
+.pl-row .x svg { width: 14px; height: 14px; }
+.pl-note { flex: none; padding: 4px 12px 10px; font-size: 11.5px; opacity: .7; }
+.pl-note[hidden] { display: none !important; }
+@media (hover: hover) and (pointer: fine) {
+  .pl-row:hover { background: rgba(255,255,255,.1); }
+  .pl-row .x:hover { opacity: 1; }
+}
+
+/* ── 弹幕设置 ── */
+.dm-panel {
+  position: absolute; top: 46px; right: 8px; z-index: 5; width: min(310px, calc(100% - 16px));
+  max-height: calc(100% - 54px); overflow: auto; -webkit-overflow-scrolling: touch;
+  background: rgba(28,20,30,.93); color: #f0e6f5; border: 1px solid rgba(255,255,255,.18); border-radius: 12px;
+  padding: 8px 12px 10px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 10px 28px rgba(0,0,0,.4);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.dm-row { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.dm-row .k { flex: none; width: 62px; color: #cbbfd6; font-size: 12px; }
+.dm-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent-deep); }
+.dm-row .val { flex: none; width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: #cbbfd6; font-size: 11.5px; }
+.dm-row .dm-toggle { color: inherit; font-size: 12.5px; }
+.dm-seg { display: flex; gap: 4px; flex: 1; }
+.dm-seg button { flex: 1; border: 1px solid rgba(255,255,255,.22); background: transparent; color: inherit; border-radius: 6px; font: inherit; font-size: 11.5px; padding: 3px 0; cursor: pointer; }
+.dm-seg button[data-on="1"] { background: var(--accent-deep); border-color: transparent; color: #fff; }
+.dm-checks { display: flex; flex-wrap: wrap; gap: 4px 10px; flex: 1; }
+.dm-checks label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.dm-checks input, .dm-row .dm-toggle input { accent-color: var(--accent-deep); width: 15px; height: 15px; }
+.dm-panel textarea {
+  flex: 1; min-width: 0; min-height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,.22);
+  background: rgba(255,255,255,.06); color: inherit; font: inherit; font-size: 12px; padding: 5px 7px; resize: vertical;
+}
+.dm-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; color: #cbbfd6; font-size: 11.5px; }
+.dm-foot button { border: 0; background: none; color: #f2b8cf; font: inherit; font-size: 12px; cursor: pointer; padding: 0; }
+/* 两个人的弹幕飘完，右下角留 3 秒「最近一条」小签（很淡，不挡操作） */
+.dm-last {
+  position: absolute; right: 10px; bottom: 52px; z-index: 3; max-width: min(62%, 320px);
+  padding: 3px 10px; border-radius: 999px; background: rgba(28,20,30,.42); color: rgba(240,230,245,.78);
+  font-size: 12px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; opacity: 0; transform: translateY(4px);
+  transition: opacity .35s ease, transform .35s cubic-bezier(.23,1,.32,1);
+}
+.dm-last[data-on="1"] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .dm-last { transition: opacity .2s linear; transform: none; } }
+
+/* ── 评论区（只读）── */
+.cmt { margin-top: 14px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--card); overflow: hidden; }
+.cmt-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 13px; border: 0;
+  background: none; font: inherit; font-size: 13.5px; font-weight: 600; color: inherit; cursor: pointer; text-align: left;
+}
+.cmt-head .n { font-weight: 400; font-size: 12px; color: var(--faint); }
+.cmt-head .caret { margin-left: auto; color: var(--faint); transition: transform .18s ease; }
+.cmt[data-open="1"] .cmt-head .caret { transform: rotate(90deg); }
+.cmt-body { padding: 0 13px 12px; display: flex; flex-direction: column; gap: 10px; }
+.c1 { border-top: 1px solid var(--border-soft); padding-top: 10px; }
+.c1:first-child { border-top: 0; padding-top: 0; }
+.c1 .who { font-size: 12px; color: var(--accent-deep); font-weight: 600; }
+.c1 .like { display: inline-flex; align-items: center; gap: 3px; margin-left: 7px; font-size: 11.5px;
+  color: var(--faint); font-variant-numeric: tabular-nums; }
+.c1 .like svg { width: 14px; height: 14px; opacity: .7; }
+.c1 .tx { margin-top: 3px; font-size: 13.5px; line-height: 1.6; word-break: break-word; white-space: pre-wrap; }
+.c1 .tx.clip { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.c1 .more { margin-top: 3px; border: 0; background: none; padding: 0; color: var(--accent-deep); font: inherit; font-size: 12px; cursor: pointer; }
+.c2 { margin-top: 6px; padding: 6px 9px; border-radius: 9px; background: var(--border-soft); font-size: 12.5px; line-height: 1.55; }
+.c2 b { color: var(--muted); font-weight: 600; }
+
+/* ── 提示条 ── */
+.toast {
+  position: fixed; left: 50%; bottom: calc(78px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: rgba(76,43,60,.94); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px;
+  opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 950;
+}
+.toast[data-on="1"] { opacity: 1; }
+
+/* ── 续播：「上次看到 x:xx，续播？」一行小字＋两个字按钮 ── */
+.resume { display: none; align-items: center; }
+.resume[data-on="1"] { display: flex; }
+.resume .t { white-space: nowrap; }
+.resume button { border: 0; font: inherit; cursor: pointer; white-space: nowrap; }
+
+/* ── 直播 ── */
+.live-stage video { aspect-ratio: 16 / 9; object-fit: contain; }
+.live-state {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; max-width: calc(100% - 24px);
+  padding: 7px 14px; border-radius: 999px; background: rgba(28,20,30,.72); color: #f0e6f5; font-size: 12.5px;
+  pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.live-meta { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.live-meta .fa { flex: none; width: 38px; height: 38px; border-radius: 999px; background: var(--border-soft) center/cover no-repeat; }
+.live-meta .tx { flex: 1; min-width: 0; }
+.live-meta .t { font-size: 15px; font-weight: 700; line-height: 1.35; word-break: break-word; }
+.live-meta .m { margin-top: 1px; font-size: 12px; color: var(--faint); }
+/* 「● 直播 · 已看 m:ss」那行（原生控件的 当前/总长 在直播里不准，见 liveClockSync） */
+.live-meta .live-clock { color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.live-meta .live-clock[hidden] { display: none; }
+/* Chrome 原生控件右边那截「/ 0:56」是 seekable 末尾（直播活边，一直在长），直播里没意义，收掉；左边当前时间留着 */
+#lv::-webkit-media-controls-time-remaining-display { display: none; }
+/* 两个人在直播里的弹幕：画面垂直中线上一条慢道，和点播那条同色同样子，用 DOM 画 */
+.live-dm { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.live-dm-pill { position: absolute; left: 100%; top: 50%; margin-top: -1em; white-space: nowrap; font-weight: 600; line-height: 1;
+  padding: 6px 13px; border: 1px solid transparent; border-radius: 999px; will-change: transform;
+  text-shadow: -1px 0 rgba(34,20,38,.9), 1px 0 rgba(34,20,38,.9), 0 -1px rgba(34,20,38,.9), 0 1px rgba(34,20,38,.9); }
+
+/* ── 嵌入模式（?embed=1，装在宿主页面的 iframe 里）：骨架上的几处收紧 ── */
+html[data-embed], html[data-embed] body { min-height: 0; }   /* 不许撑满：高度要能跟着内容缩回去（bilitube:size 量的是 .wrap） */
+html[data-embed] .dm-row { min-height: 26px; }
+html[data-embed] .mkv { font-size: 12.5px; }
+html[data-embed] #live .say { border-top: 1px solid var(--border-soft); }
+html[data-embed] .live-stage video { max-height: none; }
+html[data-embed] .live-meta { margin: 0; padding: 6px 10px; gap: 8px; }
+html[data-embed] .live-meta .fa { width: 28px; height: 28px; }
+html[data-embed] .live-meta .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-embed] .live-meta .m { font-size: 11px; }
+
+/* ══════════════════════════════════════════════════════════════
+   外观（颜色、字、白块、抽屉）。
+   颜色：黑白一套日夜，变量名和 browse/skins.css 同名（--ink / --paper / --seam / --milk / --btn …），日夜看 data-ui-theme。
+   版式：灰缝 --seam 打底、内容落在白块上；不画线不画框、无玻璃无阴影；顶栏两颗圆钮，和 browse/ 一个样子。
+   动效：一组 --ease-* / --t-* / --stagger，逐行进场（.b-in）；减少动态时全归零。
+   骨架那一层里还读 --text / --card / --accent… 这些名字，下面整组改指这套黑白，那些规则不用逐条改。
+   ══════════════════════════════════════════════════════════════ */
+.b-top, .b-meta, .b-blk, .b-empty { display: none; }
+html[data-ui="b"] {
+  --ink: #111111; --ink-soft: #4a4a4a; --muted: #8c8c8c; --faint: #c9c9c9;
+  --btn: #111111; --btn-ink: #ffffff;
+  --paper: #ffffff; --seam: #f4f4f4; --milk: #f5f5f5; --line: #e8e8e8; --hairline: #ececec;
+  --pop-rgb: 17, 17, 17;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  --r-full: 999px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1); --ease-in-out: cubic-bezier(.87, 0, .13, 1);
+  --ease-spring: cubic-bezier(.22, 1.12, .44, 1); --ease-press: cubic-bezier(.4, 0, .2, 1);
+  --t-press: .12s; --t-fast: .3s; --t-base: .55s; --t-slow: .9s; --stagger: 42ms;
+  /* 骨架那层读的名字 → 黑白这套 */
+  --text: var(--ink); --card: var(--milk); --border: var(--line); --border-soft: var(--hairline);
+  --accent: var(--ink); --accent-deep: var(--ink); --human: var(--ink); --companion: var(--ink-soft);
+  --bg: var(--paper); --screen: #000; --shadow: transparent;
+  --b-top: calc(54px + env(safe-area-inset-top, 0px));
+  color-scheme: light;
+}
+html[data-ui="b"][data-ui-theme="dark"] {
+  --ink: #f2f2f2; --ink-soft: #b4b4b4; --muted: #7d7d7d; --faint: #3c3c3c;
+  --btn: #f2f2f2; --btn-ink: #0a0a0a;
+  --paper: #141414; --seam: #000000; --milk: #222222; --line: #262626; --hairline: #1f1f1f;
+  --pop-rgb: 242, 242, 242;
+  color-scheme: dark;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui="b"] { --t-press: 0s; --t-fast: 0s; --t-base: 0s; --t-slow: 0s; --stagger: 0ms; }
+}
+html[data-ui="b"] body {
+  background: var(--seam); color: var(--ink);
+  font-family: var(--font-ui); font-weight: 500; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+html[data-ui="b"] .wrap { max-width: 560px; padding: env(safe-area-inset-top, 0px) 0 calc(24px + env(safe-area-inset-bottom, 0px)); }   /* 顶上不留黑条：画面顶到头，返回和设置两颗钮浮在画面角上 */
+html[data-ui="b"] #parts { display: none !important; }   /* 选集的空壳：下拉在抽屉里，这里不占地方 */
+html[data-ui="b"] button:focus-visible, html[data-ui="b"] input:focus-visible, html[data-ui="b"] select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ink) 55%, transparent); outline-offset: 2px;
+}
+
+/* 顶栏：左返回、右设置 */
+html[data-ui="b"] .b-top {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 940; max-width: 560px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px; background: transparent; pointer-events: none;
+}
+.b-top-btn {
+  width: 34px; height: 34px; flex-shrink: 0; padding: 0; cursor: pointer; pointer-events: auto;
+  background: rgba(0, 0, 0, .38); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border: 0; border-radius: var(--r-full); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform var(--t-base) var(--ease-spring), background var(--t-fast) var(--ease-out);
+}
+.b-top-btn:active { transform: scale(0.9); }
+.b-top-btn svg { width: 20px; height: 20px; }
+
+/* 画面：黑底铺满、不圆角不投影；画面上只剩播放器自己的控件 */
+html[data-ui="b"] #player .stage, html[data-ui="b"] #live .stage { border-radius: 0; box-shadow: none; background: #000; }
+html[data-ui="b"] #v, html[data-ui="b"] #lv { max-height: none; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
+html[data-ui="b"] #badge {
+  top: 10px; right: 10px; padding: 4px 10px; font-size: 12px; font-weight: 500;
+  background: rgba(0, 0, 0, .55); color: #fff; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+html[data-ui="b"] #liveState { background: rgba(0, 0, 0, .6); color: #fff; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui="b"] #mkvTip { color: #ddd; }
+
+/* 标题＋一行小字＋续播一行＋发弹幕那一行：一整块白 */
+html[data-ui="b"] #title {
+  background: var(--paper); margin: 0 !important; padding: 12px 16px 2px;
+  font-size: 16px !important; font-weight: 600 !important; line-height: 1.45; color: var(--ink); word-break: break-word;
+}
+html[data-ui="b"] .b-meta { display: block; background: var(--paper); padding: 2px 16px 10px; font-size: 12px; color: var(--muted); min-height: 30px; }
+/* 「上次看到 x:xx，续播？」：不浮、不上色 */
+html[data-ui="b"] #resumeAsk { padding: 0 16px 10px; gap: 14px; background: var(--paper); font-size: 12.5px; color: var(--muted); }
+html[data-ui="b"] #resumeAsk[data-on="1"] { animation: b-fade var(--t-fast) var(--ease-out); }
+html[data-ui="b"] #resumeAsk button { background: none; padding: 2px 0; font-size: 12.5px; }
+html[data-ui="b"] #resumeAsk .go { color: var(--ink); font-weight: 600; }
+html[data-ui="b"] #resumeAsk .no { color: var(--muted); }
+html[data-ui="b"] #sayBar, html[data-ui="b"] #liveSayBar { margin: 0; padding: 2px 16px 12px; gap: 8px; background: var(--paper); }
+html[data-ui="b"] #sayText, html[data-ui="b"] #liveSayText {
+  min-height: 38px; padding: 0 16px; border: 0; border-radius: var(--r-full);
+  background: var(--milk); color: var(--ink); font-family: var(--font-ui); font-size: 14px;
+}
+html[data-ui="b"] #sayText::placeholder, html[data-ui="b"] #liveSayText::placeholder { color: var(--muted); }
+@media (max-width: 759px), (pointer: coarse) { html[data-ui="b"] #sayText, html[data-ui="b"] #liveSayText { font-size: 16px; } }
+html[data-ui="b"] #sayBtn, html[data-ui="b"] #liveSayBtn { width: 38px; height: 38px; background: var(--btn); color: var(--btn-ink); box-shadow: none; }
+
+/* 直播：标题那块同样一整块白 */
+html[data-ui="b"] #live .live-meta { margin: 0; padding: 12px 16px 10px; gap: 10px; flex-wrap: nowrap; background: var(--paper); }
+html[data-ui="b"] #live .live-meta .fa { background-color: var(--milk); }
+html[data-ui="b"] #live .live-meta .tx { flex: 1 1 auto; }
+html[data-ui="b"] #live .live-meta .t { font-size: 16px; font-weight: 600; color: var(--ink); }
+html[data-ui="b"] #live .live-meta .m, html[data-ui="b"] #live .live-meta .live-clock { color: var(--muted); }
+
+/* 白块：我们的弹幕、简介 */
+html[data-ui="b"] .b-blk { display: block; background: var(--paper); padding: 12px 16px 14px; margin-top: 8px; }
+.b-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; font-weight: 600; color: var(--ink); }
+/* 时间钮＋那句话（和 browse/「一起聊过的片」同一种样子） */
+.b-lines { display: flex; flex-direction: column; gap: 6px; }
+.b-ln { display: flex; gap: 8px; align-items: baseline; }
+.b-ts {
+  flex: 0 0 auto; min-width: 50px; text-align: center; font: 600 11px/1 var(--font-mono); color: var(--ink);
+  background: var(--milk); border-radius: var(--r-full); padding: 4px 7px; border: 0; cursor: pointer;
+  transition: transform var(--t-base) var(--ease-spring);
+}
+.b-ts:active { transform: scale(0.94); }
+.b-ts.same { visibility: hidden; }
+.b-ts.clock { cursor: default; font-weight: 500; color: var(--muted); background: none; padding-left: 0; padding-right: 0; min-width: 40px; text-align: left; }
+.b-ln .tx { font-size: 13.5px; line-height: 1.6; color: var(--ink); word-break: break-word; }
+.b-ln.ai .tx { color: var(--ink-soft); }
+.b-ln.ai .who { font-size: 11px; font-weight: 600; color: var(--muted); margin-right: 6px; }
+.b-desc-tx { font-size: 13px; line-height: 1.65; color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; }
+
+/* 评论区：默认展开，头一行只是标题；先 5 条，底下「更多」 */
+html[data-ui="b"] #cmt {
+  margin-top: 8px; border: 0; border-radius: 0; background: var(--paper);
+  box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+html[data-ui="b"] #cmtHead { padding: 12px 16px 10px; font-size: 15px; font-weight: 600; color: var(--ink); pointer-events: none; }
+html[data-ui="b"] #cmtHead .n { font-size: 12px; font-weight: 500; color: var(--muted); }
+html[data-ui="b"] #cmtHead .caret { display: none; }
+html[data-ui="b"] #cmtBody { padding: 0 16px 6px; gap: 14px; }
+html[data-ui="b"] #cmt .c1 { border-top: 0; padding-top: 0; }
+html[data-ui="b"] #cmt .c1[data-fold] { display: none; }
+html[data-ui="b"] #cmt .who { color: var(--muted); font-weight: 500; }
+html[data-ui="b"] #cmt .like { color: var(--faint); }
+html[data-ui="b"] #cmt .tx { color: var(--ink); }
+html[data-ui="b"] #cmt .more { color: var(--muted); }
+html[data-ui="b"] #cmt .c2 { background: var(--milk); border: 0; border-radius: 6px; }
+html[data-ui="b"] #cmt .c2 b { color: var(--muted); }
+.b-more { align-self: center; margin: 2px 0 6px; padding: 6px 16px; border: 0; border-radius: var(--r-full); background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.b-dm-fold { display: block; margin: 6px auto -6px; }
+.b-dm-fold[hidden] { display: none; }
+
+/* 片子没打开时的一行说明（找不到这间直播 / 这部没接上）＋返回 */
+html[data-ui="b"] .b-empty:not([hidden]) { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 60px 24px; color: var(--muted); font-size: 13.5px; text-align: center; }
+.b-empty button { border: 0; border-radius: var(--r-full); padding: 7px 18px; background: var(--paper); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+
+/* 提示条：贴底，盖在抽屉上面 */
+html[data-ui="b"] .toast { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--paper); font-family: var(--font-ui); z-index: 980; }
+
+/* ── 抽屉：顶栏右边那颗钮从底下拉起来，纸色实底；按住把手往下拖能关 ── */
+.b-mask { position: fixed; inset: 0; z-index: 970; background: rgba(0, 0, 0, 0); display: flex; align-items: flex-end; justify-content: center; transition: background var(--t-fast) var(--ease-out); }
+.b-mask[hidden] { display: none; }
+.b-mask.show { background: rgba(0, 0, 0, 0.18); }
+.b-sheet {
+  width: 100%; max-width: 560px; max-height: calc(100% - var(--b-top));   /* 顶栏那一截永远露着，点它就收 */
+  overflow-y: auto; overscroll-behavior: contain; padding: 8px 10px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  border-radius: 26px 26px 0 0; background: var(--paper); color: var(--ink); font-family: var(--font-ui);
+  transform: translateY(100%); transition: transform .32s cubic-bezier(.2, .9, .3, 1.05); touch-action: pan-y;
+}
+.b-mask.show .b-sheet { transform: none; }
+.b-grip { width: 36px; height: 4px; border-radius: 2px; background: rgba(var(--pop-rgb), 0.25); margin: 2px auto 10px; }
+.b-grip, .b-head { cursor: grab; }
+.b-head { display: flex; align-items: center; gap: 12px; padding: 4px 8px 12px; }
+.b-cover { width: 64px; height: 40px; border-radius: 8px; flex-shrink: 0; background: var(--milk) center / cover no-repeat; }
+.b-cover.round { width: 40px; border-radius: 50%; }
+.b-info { min-width: 0; }
+.b-name { font-size: 15px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-artist { font-size: 12px; color: var(--ink-soft); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-artist:empty { display: none; }
+.b-big { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 2px 4px 10px; }
+.b-bigbtn {
+  display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 6px 10px;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); background: var(--milk); border: 0; border-radius: 16px;
+  cursor: pointer; transition: transform var(--t-base) var(--ease-spring);
+}
+.b-bigbtn svg { width: 22px; height: 22px; color: var(--ink); }
+.b-bigbtn:active { transform: scale(0.96); }
+.b-bigbtn[disabled] { opacity: .5; }
+.b-sep { height: 1px; background: rgba(var(--pop-rgb), 0.1); margin: 4px 10px 6px; }
+.b-row {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 13px 14px;
+  font: inherit; font-size: 14.5px; font-weight: 600; color: var(--ink); background: transparent; border: 0; border-radius: 16px; text-align: left; cursor: pointer;
+}
+.b-row svg { width: 20px; height: 20px; color: var(--ink); flex-shrink: 0; }
+.b-row:active { background: var(--milk); }
+.b-row[hidden] { display: none; }
+.b-row > span { flex: 1; min-width: 0; }
+.b-row svg.chev { width: 16px; height: 16px; color: var(--muted); transition: transform var(--t-fast) var(--ease-out); }
+.b-row[aria-expanded="true"] svg.chev { transform: rotate(90deg); }
+.b-opt { cursor: default; }
+.b-opt:active { background: transparent; }
+.b-row .v { flex: 0 0 auto; font-size: 12px; font-weight: 500; color: var(--muted); }
+.b-seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-full); background: rgba(var(--pop-rgb), 0.08); flex-shrink: 0; }
+.b-seg button { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-soft); background: transparent; border: 0; border-radius: var(--r-full); padding: 5px 12px; cursor: pointer; }
+.b-seg[data-seg="rate"] button { padding: 5px 8px; }
+.b-seg button.on { background: var(--btn); color: var(--btn-ink); }
+.b-sheet select {
+  flex: 0 1 auto; min-width: 0; max-width: 58%; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink);
+  background: rgba(var(--pop-rgb), 0.08); border: 0; border-radius: var(--r-full); padding: 6px 12px; text-overflow: ellipsis;
+}
+@media (pointer: coarse) { .b-sheet select, .dm-panel textarea { font-size: 16px; } }   /* iOS 小于 16px 会自己放大页面（同 .say input） */
+/* 抽屉里两段能展开的：稍后再看、弹幕设置（两块节点由 bInit 从画面里搬进来，这里去掉它们盖在画面上时的样子） */
+html[data-ui="b"] #pl {
+  position: static; max-height: none; margin: 0 4px 6px; background: transparent; color: var(--ink);
+  border: 0; border-radius: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+html[data-ui="b"] #pl .pl-head { display: none; }
+html[data-ui="b"] #pl .pl-list { max-height: 46vh; padding: 0 0 4px; }
+html[data-ui="b"] #pl .pl-row { padding: 6px 10px; border-radius: 12px; }
+html[data-ui="b"] #pl .pl-row[data-on="1"] { background: var(--milk); }
+html[data-ui="b"] #pl .pl-row .cv { width: 64px; background-color: var(--milk); }
+html[data-ui="b"] #pl .pl-row .t { font-weight: 500; }
+html[data-ui="b"] #pl .pl-row .m, html[data-ui="b"] #pl .pl-note { color: var(--muted); opacity: 1; }
+html[data-ui="b"] #pl .pl-row .x { color: var(--muted); }
+@media (hover: hover) and (pointer: fine) { html[data-ui="b"] #pl .pl-row:hover { background: var(--milk); } }
+html[data-ui="b"] #dmPanel {
+  position: static; width: auto; max-height: none; overflow: visible; margin: 0 4px 6px; padding: 2px 14px 8px;
+  background: transparent; color: var(--ink); border: 0; border-radius: 0; box-shadow: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none; font-size: 13px;
+}
+html[data-ui="b"] #dmPanel .dm-row .k, html[data-ui="b"] #dmPanel .dm-row .val, html[data-ui="b"] #dmPanel .dm-foot { color: var(--muted); }
+html[data-ui="b"] #dmPanel input { accent-color: var(--btn); }
+html[data-ui="b"] #dmPanel .dm-seg button { border: 0; background: rgba(var(--pop-rgb), 0.08); color: var(--ink-soft); border-radius: var(--r-full); padding: 4px 0; }
+html[data-ui="b"] #dmPanel .dm-seg button[data-on="1"] { background: var(--btn); color: var(--btn-ink); }
+html[data-ui="b"] #dmPanel textarea { border: 0; background: var(--milk); color: var(--ink); }
+html[data-ui="b"] #dmPanel .dm-foot button { color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .b-sheet, .b-mask { transition: none; } }
+
+/* 进场：新飘进来的那几条弹幕、展开的那一段、「更多」放出来的评论，逐行错开 */
+@keyframes b-stagger-in { from { opacity: 0; transform: translate3d(0, 14px, 0); } to { opacity: 1; transform: none; } }
+@keyframes b-fade { from { opacity: 0; } to { opacity: 1; } }
+.b-in { animation: b-stagger-in var(--t-base) var(--ease-out) backwards; animation-delay: calc(min(var(--i, 0), 14) * var(--stagger)); }
+
+/* ══════════════════════════════════════════════════════════════
+   嵌入模式的窄版（?embed=1，装在宿主页面的 iframe 里）。
+   窗口矮（手机上约 370×420 一块），先顾看片、再顾发弹幕：没有顶栏（返回、设置由宿主发 bilitube:cmd 来），
+   画面钉在顶上，往下翻我们的弹幕、简介、评论时片子还在眼前；抽屉从窗口底下拉起来。
+   配色：夜里照黑白；白天灰缝换成很浅的粉、字换浅灰、实心钮换粉。宿主递了自己的配色就用宿主的（最后一段）。
+   ══════════════════════════════════════════════════════════════ */
+html[data-embed][data-ui="b"] {
+  --b-top: 0px;
+  --ink: #57555a; --ink-soft: #6f6e71; --muted: #8c8b8e; --faint: #b0afb1;
+  --btn: #d9a3bd; --btn-ink: #ffffff;
+  --paper: #ffffff; --seam: #faeef5; --milk: #faeef5; --milk-strong: #f9dcec; --line: #f3e3ec; --hairline: #f6e9f0;
+  --pop-rgb: 111, 110, 113;
+}
+html[data-embed][data-ui="b"][data-ui-theme="dark"] {
+  --ink: #f2f2f2; --ink-soft: #b4b4b4; --muted: #7d7d7d; --faint: #3c3c3c;
+  --btn: #f2f2f2; --btn-ink: #0a0a0a;
+  --paper: #141414; --seam: #000000; --milk: #222222; --milk-strong: #262626; --line: #262626; --hairline: #1f1f1f;
+  --pop-rgb: 242, 242, 242;
+}
+html[data-embed][data-ui="b"] .b-top { display: none; }
+html[data-embed][data-ui="b"] .wrap { max-width: none; padding: 0 0 12px; }
+html[data-embed][data-ui="b"] #player .stage, html[data-embed][data-ui="b"] #live .stage { position: sticky; top: 0; z-index: 5; }
+/* 标题挪到宿主小窗头上（宿主照 bilitube:now 的 film 写），这里不占一行。从上到下：视频 → 续播一行 → 发弹幕 → 我们的弹幕（有才露）→ 一行折叠条。
+   折叠条就是 #bDesc（脚本把标题、那行小字、评论区都搬进它里面），默认折着，点开依次是完整标题＋小字、简介、评论区。整页打开时照旧。 */
+html[data-embed][data-ui="b"] #title { display: none !important; }
+html[data-embed][data-ui="b"] #bDesc.open #title {
+  display: block !important; margin: 0 0 2px !important; padding: 0; background: none;
+  font-size: 14.5px !important; font-weight: 600 !important; line-height: 1.45; cursor: auto;
+}
+html[data-embed][data-ui="b"] #bDesc .b-meta { display: block; padding: 0 0 8px; min-height: 0; background: none; }
+html[data-embed][data-ui="b"] #resumeAsk { padding: 8px 12px 0; }
+html[data-embed][data-ui="b"] #bDesc > .b-hd { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+html[data-embed][data-ui="b"] #bDesc > .b-hd::after { content: "›"; margin-left: auto; color: var(--muted); font-weight: 400; transition: transform .18s; }
+html[data-embed][data-ui="b"] #bDesc.open > .b-hd::after { transform: rotate(90deg); }
+html[data-embed][data-ui="b"] #bDesc:not(.open) { padding-bottom: 10px; }
+html[data-embed][data-ui="b"] #bDesc:not(.open) > .b-hd { margin-bottom: 0; }
+html[data-embed][data-ui="b"] #bDesc:not(.open) > :not(.b-hd) { display: none !important; }
+html[data-embed][data-ui="b"] #bDesc #cmt { margin-top: 14px; background: none; }
+html[data-embed][data-ui="b"] #sayBar, html[data-embed][data-ui="b"] #liveSayBar { padding: 0 12px 10px; border-bottom: 0; }
+html[data-embed][data-ui="b"] #sayBar { padding-top: 10px; }
+html[data-embed][data-ui="b"] #live .live-meta { padding: 10px 12px 8px; }
+html[data-embed][data-ui="b"] #live .live-meta .t { font-size: 14.5px; }
+html[data-embed][data-ui="b"] .b-blk { padding: 10px 12px 12px; }
+html[data-embed][data-ui="b"] .b-hd { font-size: 14px; margin-bottom: 8px; }
+html[data-embed][data-ui="b"] #cmtHead { padding: 0 0 8px; font-size: 14px; min-height: 0; }
+html[data-embed][data-ui="b"] #cmtBody { padding: 0 0 6px; }
+html[data-embed][data-ui="b"] .b-sheet { max-height: calc(100% - 10px); border-radius: 18px 18px 0 0; padding-bottom: 10px; }
+html[data-embed][data-ui="b"] .b-empty:not([hidden]) { padding: 36px 16px; }
+html[data-embed][data-ui="b"] .toast { bottom: 12px; }
+/* 宿主递来的配色（bilitube:theme → <html> 上的 --host-*，见 <head> 第三段脚本），盖在上面两套日夜之上 */
+html[data-embed][data-ui="b"][data-skin-from="host"] {
+  --paper: var(--host-panel); --seam: var(--host-bg); --milk: var(--host-tile); --milk-strong: var(--host-tile2);
+  --ink: var(--host-ink); --ink-soft: var(--host-ink2); --muted: var(--host-ink2); --faint: var(--host-ink3);
+  --btn: var(--host-accent); --btn-ink: var(--host-on-accent);
+  --line: var(--host-line); --hairline: var(--host-line);
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- 点播。顶栏、标题下那行小字、「我们的弹幕」「简介」和抽屉由脚本「界面」那段（bInit）搭起来 -->
+  <section id="player" hidden>
+    <h1 id="title"></h1>
+    <!-- 选集：多 P 的片子在这儿换集（选哪 P 就让后端认得那 P 再开）。下拉由 bInit 搬进抽屉，这个空壳只用来记「有没有选集」 -->
+    <div id="parts" hidden><select id="partSel" aria-label="选集"></select></div>
+    <div class="stage">
+      <video id="v" controls playsinline preload="metadata" crossorigin="use-credentials"></video>
+      <div class="mkv" id="mkvTip" hidden></div>
+      <canvas id="dm"></canvas>
+      <div class="badge" id="badge">在看这一幕</div>
+      <div class="dm-last" id="dmLast" data-on="0" aria-live="polite"></div>
+      <!-- 弹幕设置、稍后再看：bInit 把这两块搬进抽屉 -->
+      <div class="dm-panel" id="dmPanel" hidden>
+        <div class="dm-row"><span class="k">弹幕</span><label class="dm-toggle"><input type="checkbox" id="dmsOn">显示 B 站弹幕</label><span class="spacer"></span><span class="val" id="dmsN"></span></div>
+        <div class="dm-row"><span class="k">透明度</span><input type="range" id="dmsAlpha" min="20" max="100" step="5"><span class="val" id="dmsAlphaV"></span></div>
+        <div class="dm-row"><span class="k">字号</span><input type="range" id="dmsSize" min="70" max="140" step="10"><span class="val" id="dmsSizeV"></span></div>
+        <div class="dm-row"><span class="k">速度</span><input type="range" id="dmsSpeed" min="50" max="200" step="10"><span class="val" id="dmsSpeedV"></span></div>
+        <div class="dm-row"><span class="k">我们的</span><label class="dm-toggle"><input type="checkbox" id="dmsHome">总是显示（关了 B 站弹幕也照样飘）</label></div>
+        <div class="dm-row"><span class="k">我们的速度</span><input type="range" id="dmsHomeSpeed" min="30" max="100" step="5"><span class="val" id="dmsHomeSpeedV"></span></div>
+        <div class="dm-row"><span class="k">显示区域</span><div class="dm-seg" id="dmsArea">
+          <button type="button" data-v="0.25">1/4</button><button type="button" data-v="0.5">1/2</button>
+          <button type="button" data-v="0.75">3/4</button><button type="button" data-v="1">全屏</button></div></div>
+        <div class="dm-row"><span class="k">屏蔽类型</span><div class="dm-checks">
+          <label><input type="checkbox" id="dmsBlockTop">顶部</label><label><input type="checkbox" id="dmsBlockBottom">底部</label>
+          <label><input type="checkbox" id="dmsBlockScroll">滚动</label><label><input type="checkbox" id="dmsBlockColor">彩色</label></div></div>
+        <div class="dm-row"><span class="k">密度上限</span><input type="range" id="dmsMax" min="10" max="200" step="10"><span class="val" id="dmsMaxV"></span></div>
+        <div class="dm-row"><span class="k">重复合并</span><label class="dm-toggle"><input type="checkbox" id="dmsMerge">10 秒内同一句只飘一条（×N）</label></div>
+        <div class="dm-row" style="align-items:flex-start"><span class="k" style="padding-top:7px">关键词</span><textarea id="dmsKw" rows="2" placeholder="屏蔽词，逗号或换行分开（不分大小写）"></textarea></div>
+        <div class="dm-foot"><span>设置记在这台设备上</span><button type="button" id="dmsReset">恢复默认</button></div>
+      </div>
+      <!-- 每次展开都现问一次 api/films，AI 那边刚加的片子这里马上看得见 -->
+      <div class="pl" id="pl" hidden>
+        <div class="pl-list" id="plList"></div>
+        <div class="pl-note" id="plNote"></div>
+      </div>
+    </div>
+
+    <form class="say" id="sayBar">
+      <input id="sayText" placeholder="发弹幕（不发去 B 站）" maxlength="60"
+             autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" aria-label="发弹幕">
+      <button type="submit" id="sayBtn" aria-label="发弹幕">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+      </button>
+    </form>
+
+    <div class="cmt" id="cmt" hidden>
+      <button class="cmt-head" id="cmtHead" type="button">
+        <span>评论区</span><span class="n" id="cmtN"></span><span class="caret">›</span>
+      </button>
+      <div class="cmt-body" id="cmtBody" hidden></div>
+    </div>
+  </section>
+
+  <!-- 直播 -->
+  <section id="live" hidden>
+    <div class="stage live-stage">
+      <video id="lv" controls playsinline autoplay></video>
+      <div class="live-dm" id="liveDm" aria-hidden="true"></div>
+      <div class="live-state" id="liveState" hidden></div>
+    </div>
+    <div class="live-meta">
+      <span class="fa" id="liveFace"></span>
+      <div class="tx"><div class="t" id="liveTitle"></div><div class="m" id="liveSub"></div><div class="m live-clock" id="liveClock" hidden></div></div>
+      <!-- 清晰度下拉：bInit 搬进抽屉 -->
+      <select id="liveQn" aria-label="清晰度" hidden></select>
+    </div>
+    <form class="say" id="liveSayBar">
+      <input id="liveSayText" placeholder="发弹幕（直播不暂停）" maxlength="60"
+             autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" aria-label="发弹幕">
+      <button type="submit" id="liveSayBtn" aria-label="发弹幕">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+      </button>
+    </form>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+<!-- 续播：B 站记着「上次看到」时冒出来；bInit 把它挪到标题下面 -->
+<div class="resume" id="resumeAsk" role="dialog" aria-live="polite" aria-label="续播">
+  <span class="t" id="resumeAskT">上次看到 0:00，续播？</span>
+  <button type="button" class="go" id="resumeAskGo">续播</button><button type="button" class="no" id="resumeAskNo">不用</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var BASE = location.pathname.replace(/[^\/]*$/, "");   // 这一页所在的目录（比如 /bilitube/），接口和别的文件都跟着它走
+  var API = BASE + "api";
+  var $ = function (id) { return document.getElementById(id); };
+  // 嵌入模式：装在宿主页面的 iframe 里（<head> 第一段脚本认的旗标）。心跳、尺寸、弹幕会顺手报给宿主
+  var EMBED = document.documentElement.dataset.embed === "1";
+  // 称呼只从这一处取。没配置时的中性默认在这两行；bNames() 再读 browse/config.js 和 api/prefs 覆盖
+  var PAL = { name: "AI", user: "你", fromPrefs: false };
+  function palName() { return PAL.name || "AI"; }
+  function userName() { return PAL.user || "你"; }
+  function tellParent(playing) {
+    if (!EMBED || window.parent === window) return;
+    if (live) return liveTell();                       // 直播开着时报的是直播
+    try {
+      var v = $("v");
+      window.parent.postMessage({
+        type: "bilitube:now",
+        film: cur ? cur.title : null, id: cur ? cur.id : null,
+        t: cur ? (v.currentTime || 0) : 0,
+        playing: cur ? (playing === false ? false : (!v.paused && !v.ended && !v.hidden)) : false
+      }, location.origin);
+    } catch (e) {}
+  }
+  // 嵌入时把内容高度报给宿主（bilitube:size；评论区、弹幕列表展开收起都会变），宿主据此调 iframe 高度。
+  // 量的是 .wrap 的真实高度，不是 documentElement.scrollHeight——后者至少等于 iframe 当前的高度，只会长不会缩。
+  var tellSize = function () {};
+  if (EMBED && window.parent !== window) {
+    var _wrap = document.querySelector(".wrap");
+    tellSize = function () {
+      if (!_wrap) return;
+      var h = Math.ceil(_wrap.getBoundingClientRect().height);
+      if (h > 0) {
+        try { window.parent.postMessage({ type: "bilitube:size", h: h }, location.origin); } catch (e) {}
+      }
+    };
+    if ("ResizeObserver" in window) new ResizeObserver(tellSize).observe(_wrap || document.body);
+    window.addEventListener("load", tellSize);
+  }
+  // films：最近一次拉到的 /films（本地片＋后端认得的 B 站片）；cur：正在放的这部；notes / companionLog：这部的批注和 AI 的弹幕记录（都进弹幕时间轴）
+  var films = [], cur = null, notes = [], companionLog = [], beatTimer = 0, badgeTimer = 0;
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    var mm = (h ? String(m).padStart(2, "0") : String(m));
+    return (h ? h + ":" : "") + mm + ":" + String(x).padStart(2, "0");
+  }
+  function toast(t) {
+    var el = $("toast"); el.textContent = t; el.dataset.on = "1";
+    setTimeout(function () { delete el.dataset.on; }, 1800);
+  }
+  function get(path) { return fetch(API + path, { credentials: "same-origin" }).then(function (r) { return r.json(); }); }
+  function post(path, body) {
+    return fetch(API + path, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+
+  // ── 播放 ──
+  // 首帧之后再做的事：<video> 第一次 playing / loadeddata，或者 2.5 秒到了（暂停着进来、放不了的也别一直等），只跑一次
+  function afterStart(f, fn) {
+    var v = $("v"), done = false, timer = 0;
+    var go = function () {
+      if (done) return; done = true; clearTimeout(timer);
+      v.removeEventListener("playing", go); v.removeEventListener("loadeddata", go);
+      if (cur === f) fn();
+    };
+    if (!f.playable || f.kind !== "bili") return fn();
+    v.addEventListener("playing", go); v.addEventListener("loadeddata", go);
+    timer = setTimeout(go, 2500);
+  }
+  function open(f, opts) {
+    opts = opts || {};                               // opts.play＝开了就放（插播、&play=1）；opts.t＝跳到第几秒
+    if (cur && f && cur.id === f.id && opts.play && $("v").paused && !$("v").hidden) {
+      $("player").hidden = false;
+      if (opts.t > 0) seek(opts.t);                 // 带了 &t=：同一部也跳到那一秒
+      try { var pp = $("v").play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {}
+      return;
+    }
+    if (cur && f && cur.id === f.id && !$("v").paused) {   // 同一部：直接回去接着看，别重头来
+      if (opts.t > 0) seek(opts.t);
+      $("player").hidden = false;
+      dmStart(); tellSize();
+      return;
+    }
+    hbReset(f);                                      // 上一部先给 B 站补一记「结束」，这一部起新账
+    cur = f;
+    $("player").hidden = false;
+    $("title").textContent = f.title + (f.epTitle ? " " + f.epTitle : "");   // 番剧：番名 第N话 小标题
+    var v = $("v");
+    v.innerHTML = "";
+    liveStop(true);                                  // 直播开着就先收掉
+    if (f.playable) {
+      $("mkvTip").hidden = true; v.hidden = false;
+      if (f.kind === "bili") {
+        v.removeAttribute("src"); v.load();
+        routeStart(f, (opts.play || opts.t > 0) ? { play: !!opts.play, t: opts.t > 0 ? opts.t : 0 } : undefined);   // 直连：先问地址、赛一口，再喂给 <video>（见 routeStart）
+      } else {
+        routeStop();
+        v.crossOrigin = "use-credentials";
+        v.src = f.src;
+        if (f.vtt) {
+          var tr = document.createElement("track");
+          tr.kind = "subtitles"; tr.label = "中文"; tr.srclang = "zh"; tr.src = f.vtt; tr.default = true;
+          v.appendChild(tr);
+        }
+        v.load();
+        if (opts.t > 0) {                            // 本地片子：等元数据到了再跳到 &t= 那一秒
+          var tt = opts.t, onM = function () { v.removeEventListener("loadedmetadata", onM); if (cur === f) seek(tt); };
+          v.addEventListener("loadedmetadata", onM);
+        }
+        if (opts.play) { try { var lp = v.play(); if (lp && lp.catch) lp.catch(function () {}); } catch (e) {} }
+      }
+    } else {
+      routeStop();
+      v.hidden = true; v.removeAttribute("src");
+      $("mkvTip").hidden = false;
+      $("mkvTip").innerHTML = "这部是 " + (f.file.split(".").pop()) +
+        "，浏览器多半放不了。先在服务器上转一份 mp4（不重编码，几秒钟的事）：" +
+        "<code>ffmpeg -i \"片源目录/" + f.file + "\" -c copy -movflags +faststart \"片源目录/" +
+        f.title + ".mp4\"</code>（音轨编码不兼容时把 <code>-c copy</code> 换成 <code>-c:v copy -c:a aac</code>）";
+    }
+    notes = []; companionLog = [];
+    loadNotes();
+    startBeat();
+    loadDanmaku(f);
+    afterStart(f, function () { loadComments(f); });   // 评论区等画面动起来（或 2.5 秒）再拉，别跟首帧抢带宽
+    dmPanelOpen(false);
+    dmStart();
+    partsSync(f);
+    if (opts.t > 0) resumeHide(); else resumeAsk(f);  // B 站记着上次看到哪儿，就问一句续不续（带 &t= 进来就不问了）
+    // 换片不往历史里压一格：浏览器返回一下就回 browse/
+    try { history.replaceState(null, "", "#" + encodeURIComponent(f.id)); } catch (e) {}
+    bOpen(f);
+  }
+
+  // ── 分 P：多 P 的片子给一个最简的选集下拉 ──
+  // 每一 P 在后端是各自一条（id 带 _pN），换集＝让后端认得那 P（已认得就不出门）再 open。
+  var partsFor = "";
+  function partsSync(f) {
+    var box = $("parts"), sel = $("partSel");
+    if (f && f.pgc) return pgcPartsSync(f);
+    if (!f || f.kind !== "bili" || !f.bvid || f.pages === 1) { box.hidden = true; return; }
+    if (partsFor === f.bvid && sel.options.length > 1) {
+      sel.value = String(f.p || 1); box.hidden = false; return;
+    }
+    box.hidden = true;
+    var want = f.bvid;
+    get("/bili/pages?bvid=" + encodeURIComponent(want)).then(function (d) {
+      if (!cur || cur.bvid !== want) return;
+      var ps = (d && d.pages) || [];
+      if (ps.length < 2) return;
+      sel.innerHTML = "";
+      ps.forEach(function (x) {
+        var o = document.createElement("option");
+        o.value = String(x.p);
+        o.textContent = "P" + x.p + (x.part ? " · " + x.part : "") + (x.duration ? "（" + fmt(x.duration) + "）" : "");
+        sel.appendChild(o);
+      });
+      partsFor = want;
+      sel.value = String(cur.p || 1);
+      box.hidden = false;
+      tellSize();
+    }).catch(function () {});
+  }
+  // 番剧 / 影视：选集下拉列整部的正片（第N话 小标题），值是 ep 号；B 站标了地区受限的也列着，点了会照实说放不了
+  function pgcPartsSync(f) {
+    var box = $("parts"), sel = $("partSel"), key = "ss" + f.pgc.season_id;
+    if (partsFor === key && sel.options.length > 1) {
+      sel.value = String(f.pgc.ep_id); box.hidden = false; return;
+    }
+    box.hidden = true;
+    var want = f.id;
+    get("/bili/pages?id=" + encodeURIComponent(want)).then(function (d) {
+      if (!cur || cur.id !== want) return;
+      var ps = (d && d.pages) || [];
+      if (ps.length < 2) return;
+      sel.innerHTML = "";
+      ps.forEach(function (x) {
+        var o = document.createElement("option");
+        o.value = String(x.ep);
+        o.textContent = x.part + (x.badge ? " · " + x.badge : "") + (x.limited ? "（地区受限）" : "");
+        sel.appendChild(o);
+      });
+      partsFor = key;
+      sel.value = String(f.pgc.ep_id);
+      box.hidden = false;
+      tellSize();
+    }).catch(function () {});
+  }
+  $("partSel").addEventListener("change", function () {
+    var sel = this, p = Number(sel.value) || 1;
+    if (cur && cur.pgc) {
+      if (String(p) === String(cur.pgc.ep_id)) return;
+      sel.disabled = true;
+      post("/bili/add", { ref: "ep" + p }).then(function (r) {
+        sel.disabled = false;
+        if (r && r.ok && r.film) { toast("换到 " + (r.film.pgc && r.film.pgc.index || "这一集")); open(r.film); }
+        else { toast((r && r.error) || "没换过去"); sel.value = String(cur.pgc.ep_id); }
+      }).catch(function () { sel.disabled = false; toast("没换过去"); sel.value = String(cur.pgc.ep_id); });
+      return;
+    }
+    if (!cur || !cur.bvid || p === (cur.p || 1)) return;
+    sel.disabled = true;
+    post("/bili/add", { ref: cur.bvid + (p > 1 ? "?p=" + p : "") }).then(function (r) {
+      sel.disabled = false;
+      if (r && r.ok && r.film) { toast("换到 P" + p); open(r.film); }
+      else { toast((r && r.error) || "没换过去"); sel.value = String(cur.p || 1); }
+    }).catch(function () { sel.disabled = false; toast("没换过去"); sel.value = String(cur.p || 1); });
+  });
+
+  // ── 批注和 AI 的弹幕记录 ──
+  // api/notes 里 kind=danmaku 的是 AI 发的弹幕，其余是批注；两样都排进弹幕时间轴，放到那一秒就飘
+  function loadNotes() {
+    if (!cur) return;
+    var id = cur.id;
+    get("/notes?film=" + encodeURIComponent(id)).then(function (d) {
+      if (!cur || cur.id !== id) return;
+      var all = d.notes || [];
+      notes = all.filter(function (n) { return n.kind !== "danmaku"; });
+      companionLog = all.filter(function (n) { return n.kind === "danmaku"; });
+      dmRebuild();
+    });
+  }
+  function seek(t) { var v = $("v"); if (!v.hidden) { try { v.currentTime = t; } catch (e) {} } }
+
+  // ── 心跳（api/beat：在放哪部、第几秒、放没放）＋ 「AI 在看这一幕」角标 ──
+  function sendBeat(forcePlaying) {
+    if (!cur) return;
+    if (route && route.swapping && forcePlaying !== false) return;   // 直连半路换源那一下不算 TA 暂停
+    var v = $("v");
+    var playing = forcePlaying === false ? false : (!v.paused && !v.ended && !v.hidden);
+    tellParent(playing);             // 嵌入时每一拍也抄送给宿主（bilitube:now）
+    post("/beat", { film: cur.id, t: v.currentTime || 0, playing: playing })
+      .then(function (d) {
+        if (d && d.companionHere) lightBadge(d.companionAgeMs || 0);
+        cueHandle(d);
+      })
+      .catch(function () {});
+  }
+  // ── 插播 ──
+  // 不另开连接：api/beat 和 api/dm/say 的回信里捎带 cue（立刻切到这部开始放）和 upNext（这部放完接着放哪部）。
+  var cueSeen = 0, cueSeeded = false, upNext = null, upNextSeen = "";
+  function cueHandle(d) {
+    if (!d || !("upNext" in d)) return;
+    upNext = d.upNext || null;
+    if (!cueSeeded) {                 // 页面刚打开的第一封回信只对表：开页之前发的插播不补放（刷新页面不会被拽走）
+      cueSeeded = true;
+      if (d.cue) cueSeen = d.cue.seq;
+      if (upNext) upNextSeen = upNext.at;
+    }
+    if (upNext && upNext.at !== upNextSeen) {
+      upNextSeen = upNext.at;
+      if (cur && upNext.film !== cur.id) toast(palName() + "排了下一个：《" + (upNext.title || upNext.film) + "》");
+    }
+    var c = d.cue;
+    if (c && c.seq > cueSeen) {
+      cueSeen = c.seq;
+      playFilm(c.film, palName() + "插播：《" + (c.title || c.film) + "》");
+    }
+  }
+  function playFilm(id, msg) {
+    var find = function () { var h = null; films.forEach(function (f) { if (f.id === id) h = f; }); return h; };
+    var go = function (f) { if (msg) toast(msg); open(f, { play: true }); };
+    var hit = find();
+    if (hit && cur && cur.id === id) return go(hit);
+    get("/films").then(function (d) { films = (d && d.films) || films; hit = find(); if (hit) go(hit); })
+      .catch(function () { if (hit) go(hit); });
+  }
+  $("v").addEventListener("ended", function () {
+    if (upNext && cur && upNext.film !== cur.id) playFilm(upNext.film, "接着放" + palName() + "排的：《" + (upNext.title || upNext.film) + "》");
+  });
+  function lightBadge(age) {
+    var b = $("badge"); b.dataset.on = "1";
+    b.textContent = palName() + "在看这一幕";
+    clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(function () { delete b.dataset.on; }, Math.max(2000, 20000 - age));
+  }
+  function startBeat() { stopBeat(); sendBeat(); beatTimer = setInterval(function () { sendBeat(); }, 5000); sayStart(); }
+  // TA 直接关页面 / 切走：用 sendBeacon 补一记「停这儿了」，服务端就不用等 5 分钟的看门狗
+  window.addEventListener("pagehide", function () {
+    if (!cur) return;
+    try {
+      navigator.sendBeacon(API + "/beat", new Blob(
+        [JSON.stringify({ film: cur.id, t: $("v").currentTime || 0, playing: false })],
+        { type: "application/json" }));
+    } catch (e) {}
+  });
+  function stopBeat() { clearInterval(beatTimer); beatTimer = 0; sayStop(); }
+
+  var v = $("v");
+  // 注意别把 Event 对象直接喂给 sendBeat（它的第一个参数是「强制当作没在播」）
+  ["play", "pause", "ended", "seeked"].forEach(function (ev) { v.addEventListener(ev, function () { sendBeat(); }); });
+  v.addEventListener("loadedmetadata", function () { dmSize(); dmStart(); });
+  v.addEventListener("seeking", function () { dmReset(v.currentTime || 0); });
+  v.addEventListener("play", function () { dmStart(); });
+
+  // ══════════════════════════════════════════════════════════════
+  // 往 B 站报进度心跳
+  // 这页用自己的 <video> 放 B 站片子，不报的话 B 站那边的历史记录和「上次看到」都不会有这一条。
+  // 照 B 站网页播放器的样子报（play_type 用 B 站的码：0 播放中 / 1 开始 / 2 暂停 / 3 继续·拖完 / 4 结束）：
+  //   开播一次(1)、放着每 15 秒一次(0)、暂停一次(2)、恢复/拖完各一次(3)、放完/切片/关页一次(4，带最后进度)。
+  // currentTime 没动就不发；发失败一律静默，不弹提示、不碰播放。独立打开和嵌入是同一份代码，都报。
+  // 后端同一 cid 30 秒最多真发一次，窗口里多来的只留最新一份、到点补发。
+  // ══════════════════════════════════════════════════════════════
+  var hb = null, HB_MS = 15000;
+  function hbOn() { return !!(hb && cur && cur.id === hb.id); }
+  function hbSwapping() { return !!(route && route.swapping); }      // 直连半路换源那一下不算 TA 的动作
+  function hbStopTimer() { if (hb) { clearInterval(hb.timer); hb.timer = 0; } }
+  function hbStartTimer() {
+    if (!hb || hb.timer) return;
+    hb.timer = setInterval(function () {
+      var v = $("v");
+      if (!hbOn() || v.paused || v.ended || hbSwapping()) return;
+      hbSend(0);
+    }, HB_MS);
+  }
+  function hbSend(type, beacon) {
+    if (!hbOn()) return;
+    var v = $("v"), t = v.currentTime || 0;
+    if (type === 0 && t < hb.sentT + 1) return;                 // 放着放着：没往前走就不发
+    if (type !== 1 && Math.abs(t - hb.sentT) < 1) return;        // 暂停/拖动/结束：位置没变就不发
+    var body = { id: hb.id, progress: Math.floor(t), duration: Math.floor(v.duration || cur.duration || 0),
+                 realtime: Math.round(hb.real), play_type: type };
+    hb.sentT = t; hb.real = 0;
+    if (beacon) {
+      try { navigator.sendBeacon(API + "/bili/heartbeat", new Blob([JSON.stringify(body)], { type: "application/json" })); } catch (e) {}
+      return;
+    }
+    post("/bili/heartbeat", body).catch(function () {});
+  }
+  function hbEnd(beacon) {                                        // 切片 / 退出 / 关页：带最后进度报一记结束
+    if (!hbOn() || !hb.started) return;
+    hbStopTimer();
+    hbSend(4, beacon);
+    hb.started = false;
+  }
+  function hbReset(f) {
+    hbEnd();
+    hbStopTimer();
+    hb = (f && f.kind === "bili" && f.bvid) ? { id: f.id, started: false, sentT: -1, lastT: 0, real: 0, timer: 0, seekTimer: 0 } : null;
+  }
+  (function () {
+    var v = $("v");
+    v.addEventListener("timeupdate", function () {   // 只把「正常往前放」的那点时间记成实看秒数，拖动跳秒不算
+      if (!hbOn()) return;
+      var t = v.currentTime || 0, d = t - hb.lastT;
+      if (!v.seeking && !v.paused && d > 0 && d < 3) hb.real += d;
+      hb.lastT = t;
+    });
+    v.addEventListener("playing", function () {
+      if (!hbOn()) return;
+      hb.lastT = v.currentTime || 0;
+      if (!hb.started) { hb.started = true; hb.paused = false; hbSend(1); }
+      hbStartTimer();
+    });
+    v.addEventListener("play", function () {
+      if (!hbOn() || !hb.started || !hb.paused || hbSwapping()) return;
+      hb.paused = false; hbSend(3); hbStartTimer();
+    });
+    v.addEventListener("pause", function () {
+      if (!hbOn() || !hb.started || v.ended || hbSwapping()) return;
+      hb.paused = true; hbStopTimer(); hbSend(2);
+    });
+    v.addEventListener("seeked", function () {        // 拖进度条会连着来好几下，停手 0.8 秒再报
+      if (!hbOn() || !hb.started) return;
+      clearTimeout(hb.seekTimer);
+      hb.seekTimer = setTimeout(function () {
+        if (!hbOn() || hbSwapping()) return;
+        hb.lastT = v.currentTime || 0;
+        hbSend(3);
+      }, 800);
+    });
+    v.addEventListener("ended", function () {
+      if (!hbOn() || !hb.started) return;
+      hbStopTimer(); hbSend(4); hb.started = false;   // 再点播放就当重新开播
+    });
+    window.addEventListener("pagehide", function () { hbEnd(true); });
+  })();
+
+  // ── 续播小条：打开一部 B 站片子时问 B 站「上次看到哪儿」，有就冒一条「上次看到 12:34，续播？」──
+  var resumeT = 0, resumeFor = null, resumeTimer = 0;
+  function resumeHide() { delete $("resumeAsk").dataset.on; clearTimeout(resumeTimer); resumeFor = null; }
+  function resumeAsk(f) {
+    resumeHide();
+    if (!f || f.kind !== "bili" || !f.bvid) return;
+    var want = f.id;
+    get("/bili/progress?id=" + encodeURIComponent(want)).then(function (d) {
+      if (!cur || cur.id !== want || !d || !d.ok) return;
+      var t = Math.floor(Number(d.t) || 0), v = $("v"), D = v.duration || f.duration || 0;
+      if (t < 10 || (D && t > D - 15)) return;                    // 刚开头 / 快看完了：不问
+      if (Math.abs((v.currentTime || 0) - t) < 5) return;           // 已经在那儿了
+      resumeT = t; resumeFor = want;
+      $("resumeAskT").textContent = "上次看到 " + fmt(t) + "，续播？";
+      $("resumeAsk").dataset.on = "1";
+      clearTimeout(resumeTimer);
+      resumeTimer = setTimeout(resumeHide, 12000);
+    }).catch(function () {});
+  }
+  $("resumeAskNo").addEventListener("click", resumeHide);
+  $("resumeAskGo").addEventListener("click", function () {
+    var v = $("v"), t = resumeT, want = resumeFor;
+    resumeHide();
+    if (!cur || cur.id !== want) return;
+    if (v.readyState >= 1) return seek(t);
+    var once = function () { v.removeEventListener("loadedmetadata", once); if (cur && cur.id === want) seek(t); };
+    v.addEventListener("loadedmetadata", once);
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // 直连
+  // 走代理（api/bili/stream）时每个字节都绕服务器：B 站 CDN → 服务器 → 浏览器，服务器离 CDN 远就很慢。
+  // 所以默认直连：服务器只发地址（api/bili/direct：同一条签名路径 × 几台镜像主机），
+  // 这页在看的人这头赛一小口（每台拉 192K，谁先拉完用谁），<video crossorigin=anonymous> 直接从 CDN 取。
+  //   · Referer：整页 no-referrer（<head> 那条 meta），CDN 不带 Referer 放行；
+  //   · 跨域：CDN 把 Origin 原样回在 ACAO 里，所以 canvas 抓帧（读帧 / 发弹幕带画面）照样不被污染；
+  //   · 时效：地址约 2 小时。到期前 90 秒——暂停着就悄悄换一份；正放着就等暂停或真断了再换（接着原来那一秒）。
+  // 直连起不来（12 秒没元数据 / 报错）换下一台；几台都不通、或放着放着一分钟断三次 → 自动退回代理。
+  // 抽屉里「线路」那格能手动切；想整个关掉直连：localStorage.bilitube_direct = "0"。
+  // ══════════════════════════════════════════════════════════════
+  var route = null, routeSeq = 0, routeErrs = {};
+  var shellPgc = { n: 0, wait: {}, hooked: false, serverArea: {}, ok: {}, kept: {} };   // 番剧壳内取址（见下面 routeViaShell）
+  // 赛跑别太重：看的人那条路就那么宽，几台一起各拉一大口反而谁都拉不满（拉下来的还得扔掉，<video> 要从头再要）。
+  // 每台 64K、最多 4 台、2.5 秒封顶；赢过的那台记 30 分钟，下回直接用它、不赛。
+  var RACE_BYTES = 65536, RACE_MS = 2500, RACE_HOSTS = 4, WIN_KEY = "bilitube_direct_win", WIN_MS = 1800000, START_MS = 12000, WAIT_MS = 15000;
+  function winGet() { try { var w = JSON.parse(localStorage.getItem(WIN_KEY) || "null"); return w && Date.now() - w.at < WIN_MS ? w.host : ""; } catch (e) { return ""; } }
+  function winSet(host) { try { if (host) localStorage.setItem(WIN_KEY, JSON.stringify({ host: host, at: Date.now() })); else localStorage.removeItem(WIN_KEY); } catch (e) {} }
+  function directOff() { try { return localStorage.getItem("bilitube_direct") === "0"; } catch (e) { return false; } }
+  function hostOf(u) { try { return new URL(u, location.href).host; } catch (e) { return ""; } }
+  function routeStop() {
+    if (route) { clearTimeout(route.watch); clearTimeout(route.expTimer); clearTimeout(route.waitTimer); }
+    route = null;
+  }
+  // 赛一小口：谁先拉满 192K 谁排第一；一个都没成（比如 CORS 被 TA 那头的网络拦了）就按服务器给的顺序，交给 <video> 自己试
+  function raceHosts(urls) {
+    var w = winGet(), hit = w ? urls.filter(function (u) { return hostOf(u) === w; })[0] : null;
+    if (hit) return Promise.resolve({ order: [hit].concat(urls.filter(function (u) { return u !== hit; })), ok: 1, remembered: true });
+    var list = urls.slice(0, RACE_HOSTS);
+    if (!window.fetch || !window.AbortController || !window.ReadableStream) return Promise.resolve({ order: list, ok: 0 });
+    return new Promise(function (resolve) {
+      var won = [], left = list.length, over = false, ctrls = [];
+      function finish() {
+        if (over) return;
+        over = true;
+        clearTimeout(timer);
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} });
+        var order = won.slice();
+        urls.forEach(function (u) { if (order.indexOf(u) < 0) order.push(u); });   // 没进赛的几台排在后面兜底
+        resolve({ order: order, ok: won.length });
+      }
+      var timer = setTimeout(finish, RACE_MS);
+      list.forEach(function (u) {
+        var c = new AbortController();
+        ctrls.push(c);
+        fetch(u, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store", signal: c.signal })
+          .then(function (r) {
+            if (!r.ok || !r.body) throw new Error("http " + r.status);
+            var rd = r.body.getReader(), n = 0;
+            function pump() {
+              return rd.read().then(function (x) {
+                if (x.done) return;
+                n += x.value.byteLength;
+                return n >= RACE_BYTES ? null : pump();
+              });
+            }
+            return pump().then(function () {
+              try { c.abort(); } catch (e) {}
+              if (n > 0 && !over) { won.push(u); winSet(hostOf(u)); finish(); }      // 第一个拉满的就是最快的（记 30 分钟）
+            });
+          })
+          .catch(function () {})
+          .then(function () { left--; if (left <= 0) finish(); });
+      });
+    });
+  }
+  var directPre = {};          // 开片时 /bili/add 顺带回的直连地址：{id: {d, at}}，一分钟内第一次 routeStart 直接用
+  function routeStart(f, opts) {
+    opts = opts || {};
+    var seq = ++routeSeq;
+    if (route) { clearTimeout(route.watch); clearTimeout(route.expTimer); clearTimeout(route.waitTimer); }
+    route = { seq: seq, f: f, mode: "pending", order: [], i: 0, started: false,
+              resumeT: opts.t || 0, resumePlay: !!opts.play, proxy: f.src,
+              swapping: (opts.t || 0) > 1 || !!opts.play };        // 半路重连：从报错那一刻起就别让心跳报「暂停」
+    if (route.swapping) swapCap(seq);
+    if (directOff()) return routeProxy("直连关着");
+    if (f.pgc && shellBridge() && Date.now() - (shellPgc.serverArea[f.id] || 0) < 600000) return routeViaShell(f, seq);   // 服务器十分钟内刚说过「地区看不了」：直接请壳问，不再敲服务器
+    var qnWant = f.pgc && pgcQnPick ? "&qn=" + pgcQnPick : "";
+    var pre = directPre[f.id];
+    delete directPre[f.id];
+    var ask = (pre && !opts.fresh && !qnWant && Date.now() - pre.at < 60000) ? Promise.resolve(pre.d)
+      : get("/bili/direct?id=" + encodeURIComponent(f.id) + (opts.fresh ? "&fresh=1" : "") + qnWant);
+    ask.then(function (d) {
+      if (!route || route.seq !== seq) return;
+      if (d && d.denied && d.reason === "area" && f.pgc && shellBridge()) { shellPgc.serverArea[f.id] = Date.now(); return routeViaShell(f, seq); }
+      if (d && d.denied) return routeDenied((d.error || "B 站不给放这一集") + (d.reason === "area" ? shellHint() : ""));
+      if (d && d.proxy) route.proxy = d.proxy;
+      if (d && d.accept) pgcQnPaint(d.accept, d.qn);
+      if (!d || !d.ok || !d.urls || !d.urls.length) return routeProxy((d && d.error) || "没拿到直连地址");
+      route.expiresAt = Number(d.expiresAt) || 0;
+      route.skew = Date.now() / 1000 - (Number(d.now) || Date.now() / 1000);
+      return raceHosts(d.urls).then(function (r) {
+        if (!route || route.seq !== seq) return;
+        route.order = r.order; route.raceOk = r.ok;
+        routeTry(0);
+      });
+    }).catch(function () { if (route && route.seq === seq) routeProxy("直连地址没问到"); });
+  }
+  // 番剧：只放登录账号本来能看的。大会员 / 付费 / 地区 / DRM 不给放，就在画面那块写清楚，播放器收起来
+  function routeDenied(msg) {
+    if (!route) return;
+    clearTimeout(route.watch); clearTimeout(route.expTimer); clearTimeout(route.waitTimer);
+    route.mode = "denied";
+    var v = $("v");
+    try { v.pause(); } catch (e) {}
+    v.removeAttribute("src"); v.load(); v.hidden = true;
+    $("mkvTip").hidden = false;
+    $("mkvTip").textContent = msg + "。";
+    tellSize();
+  }
+  // 番剧的清晰度：只列 B 站这次给的档；大会员档在非大会员账号上灰着、标「大会员」，选不了
+  var pgcQnPick = 0;
+  function pgcQnPaint(accept, qn) {
+    var sel = $("pgcQn");
+    if (!sel) return;
+    sel.innerHTML = "";
+    (accept || []).forEach(function (a) {
+      var o = document.createElement("option");
+      o.value = String(a.qn); o.textContent = a.desc + (a.vip_only ? "（大会员）" : "");
+      o.disabled = !!a.vip_only;
+      sel.appendChild(o);
+    });
+    if (qn) sel.value = String(qn);
+    sel.hidden = (accept || []).length < 2;
+  }
+  // ══════════════════════════════════════════════════════════════
+  // 番剧壳内取址（可选）：B 站按「发请求的那条线」判地区，服务器和看的人不在一个地区时，很多集服务器问来是「地区看不了」。
+  // 页面跑在 App 壳里、壳注入了 window.BilitubeShell 时，就请壳从这台手机问一次 pgc/player/web/playurl，
+  // 壳把 B 站的 JSON 原样交回，这里照服务器那套规矩解析（只用账号有权的档；大会员 / 付费 / DRM / 这边也受限就照实说）。
+  // 没有壳：照常走服务器，只是「地区看不了」后面多半句提示。地址、登录都不经过这页的存储，壳也不给这页任何凭据。
+  // ══════════════════════════════════════════════════════════════
+  function shellBridge() {
+    var nb = window.BilitubeShell;
+    return nb && typeof nb.postMessage === "function" ? nb : null;
+  }
+  function shellHint() {
+    return /BilitubeShell\//.test(navigator.userAgent || "") ? "。更新 App 壳，可以按你本机所在的地区来取" : "";
+  }
+  function shellAsk(msg, ms) {
+    var nb = shellBridge();
+    if (!nb) return Promise.reject(new Error("没有桥"));
+    if (!shellPgc.hooked) {
+      shellPgc.hooked = true;
+      var onMsg = function (ev) {
+        var r;
+        try { r = JSON.parse(ev && ev.data); } catch (e) { return; }
+        var w = r && shellPgc.wait[r.id];
+        if (!w) return;
+        delete shellPgc.wait[r.id]; clearTimeout(w.timer); w.resolve(r);
+      };
+      if (nb.addEventListener) nb.addEventListener("message", onMsg); else nb.onmessage = onMsg;
+    }
+    var id = "c" + (++shellPgc.n);
+    msg.id = id;
+    return new Promise(function (resolve, reject) {
+      shellPgc.wait[id] = { resolve: resolve, timer: setTimeout(function () { delete shellPgc.wait[id]; reject(new Error("超时")); }, ms || 20000) };
+      try { nb.postMessage(JSON.stringify(msg)); } catch (e) { delete shellPgc.wait[id]; reject(e); }
+    });
+  }
+  // B 站 pgc/player/web/playurl 的整份返回 → {ok, urls, expiresAt, qn, accept} 或 {ok:false, reason, error}（同 bili-mcp 的 norm_pgc_play）
+  var SHELL_DENY = { area: "这一集 B 站说你这边的地区也看不了", vip: "这一集要大会员", pay: "这一集要单独付费",
+    drm: "这一集有版权加密（DRM），网页播放器放不了", format: "B 站只给了这个播放器放不了的格式", other: "B 站不给放这一集",
+    login: "这一集要登录 B 站才给（可以在 App 壳的设置里登）" };
+  function pgcNorm(raw) {
+    var r;
+    try { r = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (e) { r = null; }
+    function deny(reason, m) { return { ok: false, reason: reason, error: SHELL_DENY[reason] + (m && reason === "other" ? "（B 站原话：" + String(m).slice(0, 60) + "）" : "") }; }
+    if (!r || typeof r !== "object") return deny("other", "看不懂的返回");
+    if (r.code !== 0 && r.code != null) {
+      var m = String(r.message || "");
+      if (r.code === -101) return deny("login");
+      if (/地区|区域/.test(m)) return deny("area", m);
+      if (/会员/.test(m)) return deny("vip", m);
+      if (/付费|购买|承包|用券/.test(m)) return deny("pay", m);
+      return deny("other", m || "code " + r.code);
+    }
+    var res = r.result || r.data || {};
+    if (typeof res !== "object") return deny("other", "没有 result");
+    if (res.is_drm) return deny("drm");
+    if (res.is_preview === 1 || res.is_preview === true) return deny(Number(res.status) === 13 || res.vip_status !== 1 ? "vip" : "pay");
+    var durl = res.durl || [], fmt = String(res.format || "");
+    if (!durl.length || !durl[0] || !durl[0].url || durl.length > 1 || (fmt && fmt.indexOf("mp4") !== 0)) return deny("format");
+    var urls = [];
+    [durl[0].url].concat(durl[0].backup_url || []).forEach(function (u) { if (typeof u === "string" && /^https:\/\//.test(u) && urls.indexOf(u) < 0) urls.push(u); });
+    if (!urls.length) return deny("format");
+    var exp = 0;
+    try { exp = Number(new URL(urls[0]).searchParams.get("deadline")) || 0; } catch (e) {}
+    var isVip = res.vip_status === 1, needVip = {}, descs = res.accept_description || [], accept = [];
+    (res.support_formats || []).forEach(function (x) { if (x && x.quality != null) needVip[Number(x.quality)] = !!x.need_vip; });
+    (res.accept_quality || []).forEach(function (q, i) {
+      q = Number(q);
+      if (!q) return;
+      accept.push({ qn: q, desc: descs[i] || String(q), vip_only: !!needVip[q] && !isVip });
+    });
+    return { ok: true, urls: urls, expiresAt: exp || Math.floor(Date.now() / 1000) + 3600, qn: res.quality, accept: accept };
+  }
+  function routeViaShell(f, seq) {
+    route.viaShell = true; route.proxy = null;
+    var q = { op: "pgc_playurl", ep_id: Number(f.pgc.ep_id), cid: Number(f.cid), fnval: 1 };
+    if (pgcQnPick && (shellPgc.ok[f.id] || []).indexOf(pgcQnPick) >= 0) q.qn = pgcQnPick;   // 只在上次壳这边给过、账号能用的档里挑
+    shellAsk(q).then(function (r) {
+      if (!route || route.seq !== seq) return;
+      if (!r || !r.ok) return routeDenied((r && r.error) || "App 壳没问到");
+      var p = pgcNorm(r.body);
+      if (!p.ok) return routeDenied(p.error + (r.loginExpired ? "（这台手机上的 B 站登录过期了，可以在 App 壳的设置里重新登）" : ""));
+      shellPgc.ok[f.id] = p.accept.filter(function (a) { return !a.vip_only; }).map(function (a) { return a.qn; });
+      pgcQnPaint(p.accept, p.qn);
+      route.expiresAt = p.expiresAt; route.skew = 0;
+      return raceHosts(p.urls).then(function (x) {
+        if (!route || route.seq !== seq) return;
+        route.order = x.order; route.raceOk = x.ok;
+        routeTry(0);
+      });
+    }).catch(function (e) { if (route && route.seq === seq) routeDenied("App 壳没回话（" + ((e && e.message) || "超时") + "）"); });
+  }
+  // 壳那条路真放起来了：告诉服务器这一集能放（服务器自己问不到的集，要这一声才转正、弹幕评论也才照常去问）
+  function shellKeep() {
+    if (!route || !route.viaShell || !cur || !cur.pgc || shellPgc.kept[cur.id]) return;
+    shellPgc.kept[cur.id] = 1;
+    post("/bili/keep", { id: cur.id, via: "shell" }).catch(function () {});
+  }
+  function routeLoad(url, cors) {
+    var v = $("v"), seq = route.seq, t = route.resumeT, play = route.resumePlay;
+    route.swapping = t > 1 || play;           // 半路换源时别让心跳把「暂停」推给 AI
+    if (route.swapping) swapCap(seq);
+    route.started = false;
+    if (cors) v.crossOrigin = cors; else v.removeAttribute("crossorigin");
+    v.src = url;
+    v.load();
+    var onMeta = function () {
+      v.removeEventListener("loadedmetadata", onMeta);
+      if (!route || route.seq !== seq) return;
+      if (t > 1) { try { v.currentTime = t; } catch (e) {} }
+      if (play) { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
+      setTimeout(function () { if (route && route.seq === seq) route.swapping = false; }, 600);
+    };
+    v.addEventListener("loadedmetadata", onMeta);
+  }
+  function swapCap(seq) {                    // 兜底：换源 30 秒还没接上，心跳照常报（别把 TA 真暂停也吞了）
+    setTimeout(function () { if (route && route.seq === seq) route.swapping = false; }, 30000);
+  }
+  function routeTry(i) {
+    if (!route) return;
+    var cors = "anonymous";
+    if (i >= route.order.length) {
+      // 带 CORS 的都不通：最后不带 CORS 再试第一台（能放，只是抓帧会被 taint——读帧那边本来就会老实回「读不出来」）
+      if (route.noCors || !route.order.length) return routeProxy("直连的几台都不通");
+      route.noCors = true; cors = null; i = 0;
+    }
+    route.i = i; route.mode = "direct"; route.host = hostOf(route.order[i]);
+    routeLoad(route.order[i], cors);
+    clearTimeout(route.watch);
+    var seq = route.seq, v = $("v");
+    route.watch = setTimeout(function () {
+      if (!route || route.seq !== seq || route.started || v.readyState >= 1) return;
+      routeTry(route.noCors ? route.order.length : i + 1);
+    }, START_MS);
+    routeExpiry();
+  }
+  function routeProxy(why) {
+    if (!route) return;
+    if (route.viaShell) return routeDenied("从这台手机直连 B 站没放起来（" + (why || "不知道为什么") + "）");   // 服务器那条路本来就问不到这一集，不退代理
+    clearTimeout(route.watch); clearTimeout(route.expTimer);
+    route.mode = "proxy"; route.why = why || ""; route.host = "";
+    routeLoad(route.proxy || route.f.src, "use-credentials");
+  }
+  function routeExpiry() {
+    clearTimeout(route.expTimer);
+    if (!route.expiresAt) return;
+    var seq = route.seq;
+    var ms = (route.expiresAt + (route.skew || 0) - 90) * 1000 - Date.now();
+    route.expTimer = setTimeout(function () {
+      if (!route || route.seq !== seq || route.mode !== "direct") return;
+      if ($("v").paused) routeRefresh();
+      else route.stale = true;               // 正放着：等 TA 暂停或者真断了再换，不打断
+    }, Math.max(5000, Math.min(ms, 2000000000)));
+  }
+  function routeRefresh() {
+    if (!route || !cur) return;
+    var v = $("v");
+    route.stale = false;
+    routeStart(cur, { fresh: true, t: v.currentTime || route.lastT || 0, play: !v.paused });
+  }
+  function routeBroke(why) {
+    // 放过一阵又断了（多半是地址过期或 CDN 抽风）：现问一份新地址接着放；一分钟里断三次就改走代理
+    var v = $("v"), id = cur.id, now = Date.now();
+    var errs = (routeErrs[id] || []).filter(function (x) { return now - x < 60000; });
+    errs.push(now); routeErrs[id] = errs;
+    var t = v.currentTime || route.lastT || 0;
+    if (errs.length >= 3) { route.resumeT = t; route.resumePlay = true; return routeProxy(why + "，一分钟里第三次了"); }
+    routeStart(cur, { fresh: true, t: t, play: true });
+  }
+  (function () {
+    var v = $("v");
+    ["loadedmetadata", "loadeddata", "playing"].forEach(function (ev) {
+      v.addEventListener(ev, function () { if (route) { route.started = true; clearTimeout(route.watch); if (ev !== "loadedmetadata") shellKeep(); } });
+    });
+    v.addEventListener("timeupdate", function () { if (route && v.currentTime > 0) route.lastT = v.currentTime; });
+    v.addEventListener("pause", function () { if (route && route.stale && route.mode === "direct") routeRefresh(); });
+    v.addEventListener("error", function () {
+      if (!route || !cur || route.mode !== "direct") return;
+      if (route.host && route.host === winGet()) winSet("");      // 记住的那台不灵了：忘掉，下回重新赛
+      if (!route.started) { route.resumeT = route.lastT || route.resumeT || 0; return routeTry(route.noCors ? route.order.length : route.i + 1); }
+      routeBroke("直连断了");
+    });
+    // 放着放着卡住转圈 15 秒：换下一台（接着这一秒），没有下一台就走代理
+    v.addEventListener("waiting", function () {
+      if (!route || route.mode !== "direct") return;
+      clearTimeout(route.waitTimer);
+      var seq = route.seq;
+      route.waitTimer = setTimeout(function () {
+        if (!route || route.seq !== seq || route.mode !== "direct" || v.paused || v.readyState >= 3) return;
+        route.resumeT = v.currentTime || route.lastT || 0; route.resumePlay = true;
+        if (route.host && route.host === winGet()) winSet("");
+        routeTry(route.noCors ? route.order.length : route.i + 1);
+      }, WAIT_MS);
+    });
+    v.addEventListener("playing", function () { if (route) clearTimeout(route.waitTimer); });
+  })();
+
+  // ══════════════════════════════════════════════════════════════
+  // 直播（?film=live:<房间号> 打开，browse/ 里进直播间就是这样跳过来）
+  // api/live/play 给 FLV 和 HLS 地址：FLV 走 mpegts.js、HLS 走 hls.js（都按需才拉，和这页同目录）。
+  // 直连 B 站直播 CDN（它回 ACAO:*，整页 no-referrer）；直连 12 秒起不来 → 换下一条 → 最后走服务器代理。
+  // Safari / iPhone 用原生 HLS，同一套先直连后代理。地址约 1 小时过期：到期前 60 秒悄悄重连一次（FLV 接上后是长连接，不用）。
+  // 公开弹幕由服务器替这页连着（见下面「直播的公开弹幕」）；直播不记「看到哪一秒」、不往聊天里推开播 / 暂停。
+  // ══════════════════════════════════════════════════════════════
+  var live = null, liveSeq = 0, hlsLoading = null;
+  var LIVE_QN_KEY = "bilitube_live_qn", LIVE_START_MS = 12000, LIVE_SOFT_WIN_MS = 60000, LIVE_SOFT_MAX = 3;
+  // 自动降档：同一场直播 10 分钟内被看门狗（卡住 / 非致命错误攒满）拽去重连满 2 次 → 往下降一档，最低到高清 150。
+  // 只降不升：TA 手动挑的那档就是上限（手动一换，计数清零）；降档不写 localStorage，下回开播还是 TA 挑的那档。
+  var LIVE_QN_DESC = [10000, 400, 250, 150, 80], LIVE_QN_NAME = { 10000: "原画", 400: "蓝光", 250: "超清", 150: "高清", 80: "流畅" };
+  var LIVE_QN_FLOOR = 150, LIVE_DOWN_WIN_MS = 600000, LIVE_DOWN_AFTER = 2;
+  function liveQnDown(L) {
+    var cur = Math.min(Number(L.qn) || 10000, Number(L.gotQn) || 10000);
+    var ok = L.acceptQn && L.acceptQn.length ? L.acceptQn : LIVE_QN_DESC;
+    for (var i = 0; i < LIVE_QN_DESC.length; i++) {
+      var q = LIVE_QN_DESC[i];
+      if (q < cur && q >= LIVE_QN_FLOOR && ok.indexOf(q) >= 0) return q;
+    }
+    return 0;
+  }
+  // 没挑过就超清 250；在抽屉「清晰度」里挑过的记在 localStorage
+  function liveQnPref() { try { return Number(localStorage.getItem(LIVE_QN_KEY)) || 250; } catch (e) { return 250; } }
+  function liveNum(n) { n = Number(n) || 0; return n >= 10000 ? (n / 10000).toFixed(n >= 100000 ? 0 : 1) + " 万" : String(n); }
+  function loadHls() {
+    if (window.Hls) return Promise.resolve(window.Hls);
+    if (hlsLoading) return hlsLoading;
+    hlsLoading = new Promise(function (res, rej) {
+      var s = document.createElement("script");
+      s.src = BASE + "hls.light.min.js?v=1.7.3";
+      s.onload = function () { if (window.Hls) res(window.Hls); else rej(new Error("hls.js 没装上")); };
+      s.onerror = function () { hlsLoading = null; rej(new Error("hls.js 没拉下来")); };
+      document.head.appendChild(s);
+    });
+    return hlsLoading;
+  }
+  // 为什么直播先走 FLV：B 站直播的 HLS 一片只有 1 秒、清单里只留 4～8 片，
+  // hls.js 一片一片顺着拉，每片都要来回问一次；离 CDN 远（一来一回 0.5 秒以上）就追不上，几秒就转圈。
+  // FLV 是一条长连接一直往下流，没有「每秒问一次」，所以先走 FLV（mpegts.js 1.7.3，Apache-2.0，本地一份），不通再退回 HLS。
+  var mpegtsLoading = null;
+  function loadMpegts() {
+    if (window.mpegts) return Promise.resolve(window.mpegts);
+    if (mpegtsLoading) return mpegtsLoading;
+    mpegtsLoading = new Promise(function (res, rej) {
+      var s = document.createElement("script");
+      s.src = BASE + "mpegts.min.js?v=1.7.3";
+      s.onload = function () { if (window.mpegts) res(window.mpegts); else rej(new Error("mpegts.js 没装上")); };
+      s.onerror = function () { mpegtsLoading = null; rej(new Error("mpegts.js 没拉下来")); };
+      document.head.appendChild(s);
+    });
+    return mpegtsLoading;
+  }
+  function liveNativeFirst() {                   // Safari / iPhone：原生 HLS 优先，不走 FLV
+    return !!$("lv").canPlayType("application/vnd.apple.mpegurl") && !/Chrome\/|Android/.test(navigator.userAgent);
+  }
+  function liveNote(t) { if (t && t !== "在找这间房…") bEmptyShow(t); }   // 没开成：画面那块换成一行说明＋返回
+  function liveState(t) { var el = $("liveState"); el.hidden = !t; el.textContent = t || ""; }
+  function liveStateDone() {                     // 接上了：清状态行；「降到 X 了」那句留够 holdUntil 再清
+    var L = live, wait = L && L.holdUntil ? L.holdUntil - Date.now() : 0;
+    if (wait <= 0) return liveState("");
+    clearTimeout(L.holdTimer);
+    L.holdTimer = setTimeout(function () { if (live === L && L.started) liveState(""); }, wait);
+  }
+  // 抽屉「线路」那格的小灰字：直连再细分是近处节点还是 B 站原给的那条（有近处候选时才分）
+  function liveRouteText() {
+    var m = live && live.started ? live.route : "";
+    if (m === "proxy") return "代理";
+    if (m !== "direct") return "";
+    return "直连" + (live.line === "near" ? " · 近处" : live.line === "orig" && live.hadNear ? " · 原线路" : "");
+  }
+  // 直播线路赛跑（同点播 raceHosts 那套）：地址是服务器问的，B 站按服务器的位置配了节点；
+  // api/live/play 另给一串候选（同一条签名路径换成近处节点，B 站原给的那条永远在里面），
+  // 这里在看的人这头各连一小会儿：读到 FLV 头（或 #EXTM3U）再收几十 KB 就掐断，算首包时间和头几百毫秒的速率，挑最快的。
+  // 一次只开两条、最多试三条；回的不是流（403 / JSON 报错 / 连不上）直接出局。一条都不行 → 服务器给的顺序（原地址直连 → 代理）。
+  // 放着放着被看门狗判卡住的那台主机记 5 分钟「不好」，下回赛跑排到最后，等于换下一条候选。
+  var LIVE_RACE_N = 3, LIVE_RACE_PAR = 2, LIVE_RACE_EACH_MS = 2500, LIVE_RACE_MS = 4500;
+  var LIVE_RACE_BYTES = 65536, LIVE_RACE_WIN_MS = 700, LIVE_BAD_MS = 300000, LIVE_LINE_KEY = "bilitube_live_line";
+  function liveBadHost(L, h) { return !!h && Date.now() - ((L.bad || {})[h] || 0) < LIVE_BAD_MS; }
+  function liveRace(L, cands, orig, kind) {
+    var near = [], org = [], bad = [];
+    cands.forEach(function (u) {
+      if (liveBadHost(L, hostOf(u))) bad.push(u); else (orig.indexOf(u) >= 0 ? org : near).push(u);
+    });
+    if (!near.length && !org.length) { near = bad.filter(function (u) { return orig.indexOf(u) < 0; }); org = bad.filter(function (u) { return orig.indexOf(u) >= 0; }); bad = []; }
+    var pref = "near";
+    try { pref = localStorage.getItem(LIVE_LINE_KEY) === "orig" ? "orig" : "near"; } catch (e) {}
+    var a = pref === "orig" ? org : near, b = pref === "orig" ? near : org, queue = [];
+    for (var i = 0; i < Math.max(a.length, b.length); i++) { if (a[i]) queue.push(a[i]); if (b[i]) queue.push(b[i]); }
+    if (L.winHost) queue.sort(function (x, y) { return (hostOf(y) === L.winHost) - (hostOf(x) === L.winHost); });
+    var test = queue.slice(0, LIVE_RACE_N), rest = queue.slice(LIVE_RACE_N).concat(bad);
+    if (!test.length || !window.fetch || !window.AbortController || !window.ReadableStream) return Promise.resolve({ order: [], ok: 0 });
+    return new Promise(function (resolve) {
+      var won = [], out = [], ctrls = [], over = false, next = 0, running = 0;
+      function finish() {
+        if (over) return;
+        over = true; clearTimeout(cap);
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} });
+        won.sort(function (x, y) { return x.score - y.score; });
+        var order = won.map(function (w) { return w.url; });
+        test.forEach(function (u) { if (order.indexOf(u) < 0 && out.indexOf(u) < 0) order.push(u); });   // 慢的、没轮上的排在赢家后面
+        resolve({ order: order.concat(rest), ok: won.length });
+      }
+      var cap = setTimeout(finish, LIVE_RACE_MS);
+      function one(u) {
+        var c = new AbortController(), t0 = performance.now(), first = 0, n = 0, head = [], gotHead = false, done = false;
+        ctrls.push(c);
+        var kill = setTimeout(function () { try { c.abort(); } catch (e) {} }, LIVE_RACE_EACH_MS);
+        function isStream() {
+          if (kind === "flv") return head[0] === 0x46 && head[1] === 0x4C && head[2] === 0x56;           // "FLV"
+          return String.fromCharCode.apply(null, head.slice(0, 7)) === "#EXTM3U";
+        }
+        fetch(u, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store", signal: c.signal })
+          .then(function (r) {
+            if (!r.ok || !r.body) throw new Error("http " + r.status);
+            var rd = r.body.getReader();
+            function pump() {
+              return rd.read().then(function (x) {
+                if (x.done) { done = true; return; }
+                var v = x.value;
+                if (!first) first = performance.now();
+                for (var j = 0; head.length < 8 && j < v.byteLength; j++) head.push(v[j]);
+                if (!gotHead && head.length >= 7) { if (!isStream()) throw new Error("not a stream"); gotHead = true; }
+                n += v.byteLength;
+                if (n >= LIVE_RACE_BYTES || performance.now() - first >= LIVE_RACE_WIN_MS) return;
+                return pump();
+              });
+            }
+            return pump();
+          })
+          .then(function () {
+            if (over) return;
+            if (!gotHead && !(head.length >= 3 && isStream())) { out.push(u); return; }
+            var now = performance.now(), ttfb = first - t0;
+            var score = n >= LIVE_RACE_BYTES || kind !== "flv" || done ? now - t0
+              : ttfb + LIVE_RACE_BYTES / Math.max(n / Math.max(now - first, 50), 1);
+            won.push({ url: u, score: score });
+            if (won.length === 1) { clearTimeout(cap); cap = setTimeout(finish, Math.max(300, Math.min(score, 1200))); }   // 有赢家了，别的再等一小会儿就收
+          }, function (e) {
+            if (!over && !gotHead) out.push(u);        // 403 / JSON / 连不上：出局；头对了但拉到一半被掐（太慢）的不出局
+          })
+          .then(function () {
+            clearTimeout(kill); try { c.abort(); } catch (e) {}
+            running--; if (!over) pump2();
+          });
+      }
+      function pump2() {
+        while (running < LIVE_RACE_PAR && next < test.length) { running++; one(test[next++]); }
+        if (!running && next >= test.length) finish();
+      }
+      pump2();
+    });
+  }
+  function liveWon(L) {                         // 真放起来了：记住这台主机（这一场重连先试它）和近处 / 原线路哪类赢（下回开播先排它）
+    if (L.route !== "direct" || !L.hadNear) return;
+    L.winHost = L.lineHost;
+    try { localStorage.setItem(LIVE_LINE_KEY, L.line === "orig" ? "orig" : "near"); } catch (e) {}
+  }
+  function liveMarkBad(L) {                      // 这条放着放着卡住了：记下主机，重连时赛跑把它排到最后
+    var t = L && L.tries && L.tries[L.i];
+    if (!t || t.route !== "direct") return false;
+    var h = hostOf(t.url);
+    if (!h) return false;
+    (L.bad || (L.bad = {}))[h] = Date.now();
+    if (L.winHost === h) L.winHost = "";
+    return true;
+  }
+  function liveHasAlt(L) {                       // 除了此刻这台，还有没被记「不好」的直连候选吗
+    var t = L && L.tries && L.tries[L.i];
+    if (!t || t.route !== "direct" || t.kind !== "flv") return false;
+    var h = hostOf(t.url);
+    return (L.cands || []).some(function (u) { var x = hostOf(u); return x !== h && !liveBadHost(L, x); });
+  }
+  // <live-dog> 直播看门狗
+  // 纯函数，不碰 DOM：每秒喂一次 {now,t,paused,ended,hidden,active}，回 "none" | "seek"（追活边）| "broke"（重连）。
+  // currentTime 连续 DOG_STALL_MS 没往前走 → seek；追完再 DOG_RESEEK_MS 还不动 → broke（共 10 秒）。
+  // 后台（document.hidden）、暂停、放完、还没起播（!started）一律清零，回来从头计。
+  // 这一段是纯函数，方便单独抽出来测。
+  var DOG_TICK_MS = 1000, DOG_STALL_MS = 5000, DOG_RESEEK_MS = 5000;
+  function liveDogStep(d, s) {
+    if (!s.active || s.hidden || s.paused || s.ended) { d.lastT = null; d.seekAt = 0; d.rebase = false; return "none"; }
+    if (d.lastT == null) { d.lastT = s.t; d.since = s.now; d.seekAt = 0; d.rebase = false; return "none"; }
+    if (d.rebase) { d.rebase = false; d.lastT = s.t; return "none"; }        // 追边跳过去的那一下不算「往前走」
+    if (s.t > d.lastT + 0.05) { d.lastT = s.t; d.since = s.now; d.seekAt = 0; return "none"; }
+    if (s.t < d.lastT - 0.05) d.lastT = s.t;                                   // 往回拖：换基准，不清计时
+    if (d.seekAt) {
+      if (s.now - d.seekAt < DOG_RESEEK_MS) return "none";
+      d.lastT = null; d.seekAt = 0; return "broke";
+    }
+    if (s.now - d.since >= DOG_STALL_MS) { d.seekAt = s.now; d.rebase = true; return "seek"; }
+    return "none";
+  }
+  // </live-dog>
+  function liveDogTick() {
+    var L = live, lv = $("lv");
+    if (!L) return;
+    var t = lv.currentTime || 0;
+    var act = liveDogStep(L.dog || (L.dog = {}), { now: Date.now(), t: t, paused: lv.paused, ended: lv.ended,
+                                                   hidden: !!document.hidden, active: !!L.started });
+    if (act === "seek") {
+      var edge = 0;
+      try { if (L.hls && L.hls.liveSyncPosition > 0) edge = L.hls.liveSyncPosition; } catch (e) {}
+      try { if (!edge && lv.seekable && lv.seekable.length) edge = lv.seekable.end(lv.seekable.length - 1) - 2; } catch (e) {}
+      try { lv.currentTime = edge > t + 0.5 ? edge : t + 0.1; } catch (e) {}   // 活边没往前长（m3u8 不更新）就轻推 0.1 秒跳过空洞
+    } else if (act === "broke") liveBroke(true);
+  }
+  // 「● 直播 · 已看 m:ss」：只累计正常往前放的那点时间（跳边、换源、卡住都不算），不显示点播那种 当前/总长
+  function liveClockSync() {
+    var L = live, el = $("liveClock"), lv = $("lv");
+    if (!L) { el.hidden = true; return; }
+    var t = lv.currentTime || 0;
+    if (L.clockT != null && !lv.seeking) { var dt = t - L.clockT; if (dt > 0 && dt < 3) L.watched = (L.watched || 0) + dt; }
+    L.clockT = t;
+    el.hidden = false;
+    el.textContent = "● 直播 · 已看 " + fmt(L.watched || 0);
+  }
+  function liveTell() {
+    if (!EMBED || window.parent === window) return;
+    var lv = $("lv"), i = live && live.info;
+    try {
+      window.parent.postMessage({
+        type: "bilitube:now",
+        film: i ? "直播 · " + (i.title || i.uname || i.room) : null, id: i ? "live:" + i.room : null,
+        t: i ? (lv.currentTime || 0) : 0, playing: i ? (!lv.paused && !lv.ended) : false
+      }, location.origin);
+    } catch (e) {}
+  }
+  function liveKill() {
+    var lv = $("lv");
+    if (live && live.hls) { try { live.hls.destroy(); } catch (e) {} live.hls = null; }
+    if (live && live.mp) { try { live.mp.destroy(); } catch (e) {} live.mp = null; }
+    lv.removeAttribute("src");
+    try { lv.load(); } catch (e) {}
+  }
+  function liveStop(keepView) {
+    if (!live) return;
+    var L = live;
+    clearTimeout(L.watch); clearTimeout(L.expTimer); clearInterval(L.tellTimer); clearInterval(L.dogTimer); clearTimeout(L.holdTimer);
+    liveKill();
+    liveSayStop();
+    ldmStop();
+    lshotStop();
+    live = null; liveSeq++;
+    liveState(""); liveClockSync();
+    if (!keepView) $("live").hidden = true;
+    tellParent(false);
+    tellSize();
+  }
+  function openLive(ref) {
+    ref = String(ref || "").trim();
+    if (!ref) return;
+    var seq = ++liveSeq;
+    liveNote("在找这间房…");
+    get("/live/room?ref=" + encodeURIComponent(ref)).then(function (d) {
+      if (seq !== liveSeq) return;
+      if (!d || !d.ok) { liveNote((d && d.error) || "没找到这间房"); return; }
+      if (!d.live) { liveNote((d.uname ? d.uname + " 的直播间" : "这间房") + "现在没在播"); return; }
+      liveNote("");
+      liveShow(d);
+    }).catch(function () { if (seq === liveSeq) liveNote("没问到，等一下再试"); });
+  }
+  function liveShow(info) {
+    var v = $("v");
+    if (cur && !v.paused) { try { v.pause(); } catch (e) {} }   // 点播那部停在这一秒
+    liveStop(true);
+    live = { room: info.room, info: info, qn: liveQnPref(), seq: 0, tries: [], i: 0 };
+    plOpen(false); dmPanelOpen(false); dmStop();
+    $("player").hidden = true; $("live").hidden = false;
+    $("liveTitle").textContent = info.title || ("直播间 " + info.room);
+    $("liveSub").textContent = [info.uname, info.area, info.online ? "人气 " + liveNum(info.online) : ""]
+      .filter(Boolean).join(" · ");
+    var fa = $("liveFace");
+    fa.style.backgroundImage = info.face && info.uid
+      ? "url('" + API + "/bili/face?mid=" + encodeURIComponent(info.uid) + "&u=" + encodeURIComponent(info.face) + "')" : "";
+    liveStart();
+    liveSayStart();
+    ldmStart();
+    lshotStart();
+    live.tellTimer = setInterval(liveTell, 5000);
+    live.dogTimer = setInterval(liveDogTick, DOG_TICK_MS);
+    liveTell(); tellSize();
+    bLive(info);
+  }
+  function liveStart(opts) {
+    opts = opts || {};
+    var L = live;
+    if (!L) return;
+    var seq = L.seq = ++liveSeq;
+    clearTimeout(L.watch); clearTimeout(L.expTimer);
+    if (!opts.quiet) liveState("连上直播间…");
+    get("/live/play?room=" + encodeURIComponent(L.room) + "&qn=" + encodeURIComponent(L.qn) + (opts.fresh ? "&fresh=1" : ""))
+      .then(function (d) {
+        if (live !== L || L.seq !== seq) return;
+        if (!d || !d.ok) { liveKill(); liveState(d && d.offline ? "主播下播了" : ((d && d.error) || "没拿到直播地址")); return; }
+        var sel = $("liveQn");
+        sel.innerHTML = "";
+        (d.accept || []).forEach(function (a) {
+          var o = document.createElement("option");
+          o.value = a.qn; o.textContent = a.desc; sel.appendChild(o);
+        });
+        sel.hidden = !(d.accept && d.accept.length > 1);
+        if (d.qn) sel.value = String(d.qn);
+        L.gotQn = Number(d.qn) || 0;
+        L.acceptQn = (d.accept || []).map(function (a) { return Number(a.qn); });
+        var direct = [], proxy = [];
+        (d.streams || []).forEach(function (s) {
+          s.urls.slice(0, 2).forEach(function (u) { direct.push({ route: "direct", kind: s.kind, url: u }); });
+          if (d.proxy && d.proxy[s.kind]) proxy.push({ route: "proxy", kind: s.kind, url: d.proxy[s.kind] });
+        });
+        // FLV 排最前：直连两条（有的 CDN 节点要 live.bilibili.com 的 Referer，浏览器带不了，会当场 403，马上换下一条）
+        // → FLV 走代理（服务器替它带 Referer，一条长连接）→ 最后才轮到 HLS 直连 / 代理
+        var flvs = (d.flv || []).slice(0, 2), flvT = [], useFlv = false;
+        if (flvs.length && !!(window.MediaSource || window.ManagedMediaSource) && !liveNativeFirst()) {
+          useFlv = true;
+          flvs.forEach(function (u) { flvT.push({ route: "direct", kind: "flv", url: u, line: "orig" }); });
+          flvT[L.preferProxy ? "unshift" : "push"]({ route: "proxy", kind: "flv", url: API + "/live/seg?u=" + encodeURIComponent(flvs[0]) });
+        }
+        L.tries = flvT.concat(L.preferProxy ? proxy.concat(direct) : direct.concat(proxy));
+        L.expiresAt = Number(d.expiresAt) || 0;
+        L.skew = Date.now() / 1000 - (Number(d.now) || Date.now() / 1000);
+        // 有近处候选就先在这头赛一小口，赢的排进最前；一条都不行就是上面这份原样的顺序
+        var s0 = (d.streams || [])[0] || {};
+        var rc = useFlv ? (d.flvCands || []) : liveNativeFirst() ? (s0.cands || []) : [];
+        var ro = useFlv ? flvs : (s0.urls || []).slice(0, 2);
+        L.cands = useFlv ? rc.slice() : [];
+        L.hadNear = rc.some(function (u) { return ro.indexOf(u) < 0; });
+        if (!L.hadNear || L.preferProxy) { liveTry(0, seq); liveExpArm(L, seq); return; }
+        liveRace(L, rc, ro, useFlv ? "flv" : "m3u8").then(function (r) {
+          if (live !== L || L.seq !== seq) return;
+          if (r.ok) {
+            var kind = useFlv ? "flv" : s0.kind;
+            var won = r.order.map(function (u) { return { route: "direct", kind: kind, url: u, line: ro.indexOf(u) >= 0 ? "orig" : "near" }; });
+            L.tries = won.concat(L.tries.filter(function (t) { return !(t.route === "direct" && t.kind === kind); }));
+          }
+          liveTry(0, seq);
+        });
+        liveExpArm(L, seq);
+      })
+      .catch(function () { if (live === L && L.seq === seq) liveState("没拿到直播地址，等一下再试"); });
+  }
+  function liveExpArm(L, seq) {
+    var ms = (L.expiresAt + L.skew - 60) * 1000 - Date.now();
+    if (L.expiresAt) L.expTimer = setTimeout(function () {
+      if (live === L && L.seq === seq && !(L.flv && L.started)) liveStart({ fresh: true, quiet: true });   // FLV 接上了就是一条长连接，地址到期不影响
+    }, Math.max(30000, Math.min(ms, 2000000000)));
+  }
+  function liveKick() {
+    var p = $("lv").play();
+    if (p && p.catch) p.catch(function (e) {             // 只有浏览器真不让自动播才提示；换源打断的 AbortError 不算
+      if (e && e.name === "NotAllowedError" && live && !live.started) liveState("点画面上的播放键开始");
+    });
+  }
+  function liveTry(i, seq) {
+    var L = live, lv = $("lv");
+    if (!L || L.seq !== seq) return;
+    clearTimeout(L.watch);
+    if (i >= L.tries.length) { liveKill(); liveState("这间房放不出来（直连和代理都没通）"); return; }
+    var t = L.tries[i];
+    L.i = i; L.route = t.route; L.kind = t.kind; L.started = false; L.native = false; L.flv = false; L.mediaFix = false;
+    L.line = t.route === "direct" ? (t.line || "orig") : ""; L.lineHost = t.route === "direct" ? hostOf(t.url) : "";
+    liveKill();
+    lshotBad = false;                       // 换了一条源：画布能不能截重新验
+    var next = function () {
+      if (live === L && L.seq === seq && L.i === i && !L.started) liveTry(i + 1, seq);
+    };
+    L.watch = setTimeout(next, LIVE_START_MS);
+    L.next = next;
+    var preferNative = !!lv.canPlayType("application/vnd.apple.mpegurl") && !/Chrome\/|Android/.test(navigator.userAgent);
+    var useNative = function () {
+      L.native = true;
+      lv.src = t.url; lv.load(); liveKick();
+    };
+    if (t.kind === "flv") return loadMpegts().then(function (M) {
+      if (live !== L || L.seq !== seq || L.i !== i) return;
+      if (!M.isSupported || !M.isSupported()) { clearTimeout(L.watch); return next(); }
+      // 流畅优先：不追帧（liveBufferLatencyChasing 关）、攒一点 stash 再喂，延迟多几秒不要紧
+      var p = M.createPlayer({ type: "flv", isLive: true, url: t.url, cors: true },
+        { isLive: true, enableWorker: false, enableStashBuffer: true, stashInitialSize: 384 * 1024, lazyLoad: false,
+          liveBufferLatencyChasing: false, autoCleanupSourceBuffer: true,
+          autoCleanupMaxBackwardDuration: 60, autoCleanupMinBackwardDuration: 30, referrerPolicy: "no-referrer" });
+      L.mp = p; L.flv = true;
+      p.on(M.Events.ERROR, function () {
+        if (live !== L || L.mp !== p) return;
+        if (!L.started) { clearTimeout(L.watch); return next(); }
+        liveBroke();
+      });
+      p.attachMediaElement(lv); p.load(); liveKick();
+    }).catch(function () {
+      if (live === L && L.seq === seq && L.i === i) { clearTimeout(L.watch); next(); }
+    });
+    if (preferNative) return useNative();
+    loadHls().then(function (Hls) {
+      if (live !== L || L.seq !== seq || L.i !== i) return;
+      if (!Hls.isSupported()) { if (lv.canPlayType("application/vnd.apple.mpegurl")) return useNative(); throw new Error("no mse"); }
+      // 流畅优先——离活边远一点（6 片）、多攒缓冲、拉片多重试几次，延迟多几秒不要紧
+      var h = new Hls({ liveSyncDurationCount: 6, liveMaxLatencyDurationCount: 12,
+                        maxBufferLength: 30, maxMaxBufferLength: 60,
+                        manifestLoadingMaxRetry: 1, manifestLoadingTimeOut: 8000,
+                        levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 5, fragLoadingRetryDelay: 500,
+                        backBufferLength: 30, lowLatencyMode: false });
+      L.hls = h;
+      h.on(Hls.Events.MANIFEST_PARSED, liveKick);
+      h.on(Hls.Events.FRAG_BUFFERED, function () {
+        if (L.started || live !== L) return;
+        L.started = true; clearTimeout(L.watch); liveWon(L);
+        if (t.route === "proxy") L.preferProxy = true;   // 这次会话里直连不通，重连时先走代理
+        liveStateDone();
+      });
+      h.on(Hls.Events.ERROR, function (ev, data) {
+        if (!data || live !== L || L.hls !== h) return;
+        if (!data.fatal) {                         // 非致命的卡顿/拉片失败也数，60 秒内满 3 次就提前重连，不等它变 fatal
+          var ED = Hls.ErrorDetails || {};
+          var soft = [ED.BUFFER_STALLED_ERROR || "bufferStalledError", ED.FRAG_LOAD_ERROR || "fragLoadError",
+                      ED.LEVEL_LOAD_ERROR || "levelLoadError"];
+          if (!L.started || soft.indexOf(data.details) < 0) return;
+          var now = Date.now();
+          L.soft = (L.soft || []).filter(function (x) { return now - x < LIVE_SOFT_WIN_MS; });
+          L.soft.push(now);
+          if (L.soft.length >= LIVE_SOFT_MAX) liveBroke(true);
+          return;
+        }
+        if (!L.started) { clearTimeout(L.watch); return next(); }
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !L.mediaFix) { L.mediaFix = true; h.recoverMediaError(); return; }
+        liveBroke();
+      });
+      h.loadSource(t.url);
+      h.attachMedia(lv);
+    }).catch(function () {
+      if (live !== L || L.seq !== seq) return;
+      clearTimeout(L.watch);
+      liveState("这台浏览器放不了直播（hls.js 没装上）");
+    });
+  }
+  function liveBroke(byDog) {                    // byDog：看门狗（卡住 / 非致命错误攒满）拽的；fatal 错误不传
+    var L = live;
+    if (!L) return;
+    var now = Date.now();
+    L.errs = (L.errs || []).filter(function (x) { return now - x < 60000; });
+    L.errs.push(now);
+    if (L.route === "direct" && L.errs.length >= 3) L.preferProxy = true;
+    L.soft = []; L.dog = {};
+    var msg = "流断了，重新接上…";
+    if (byDog) {
+      L.stallBrokes = (L.stallBrokes || []).filter(function (x) { return now - x < LIVE_DOWN_WIN_MS; });
+      L.stallBrokes.push(now);
+      var q = L.stallBrokes.length >= LIVE_DOWN_AFTER ? liveQnDown(L) : 0;
+      var alt = liveHasAlt(L);
+      liveMarkBad(L);                            // 卡住的这台记下来，重连时换下一条候选
+      if (q) { L.qn = q; L.stallBrokes = []; msg = "有点卡，降到 " + (LIVE_QN_NAME[q] || q) + " 了"; L.holdUntil = now + 6000; }
+      else if (alt) { msg = "有点卡，换一条线路…"; }
+    }
+    liveState(msg);                              // 接上后 liveStateDone() 清掉（降档那句多留几秒）；quiet 让 liveStart 别盖成「连上直播间…」
+    liveStart({ fresh: true, quiet: true });
+  }
+  (function () {
+    var lv = $("lv");
+    lv.addEventListener("playing", function () {
+      if (!live) return;
+      liveStateDone();
+      if ((live.native || live.flv) && !live.started) { live.started = true; clearTimeout(live.watch); liveWon(live); if (live.route === "proxy") live.preferProxy = true; }
+    });
+    lv.addEventListener("error", function () {
+      if (!live || !live.native || !lv.getAttribute("src")) return;
+      if (!live.started) { clearTimeout(live.watch); return live.next && live.next(); }
+      liveBroke();
+    });
+    ["play", "pause"].forEach(function (ev) { lv.addEventListener(ev, liveTell); });
+    lv.addEventListener("timeupdate", liveClockSync);
+    lv.addEventListener("waiting", function () {       // 一分钟里转圈满 4 次 → 先换线路，没得换再降一档（最低高清，只降不升，同看门狗那套）
+      var L = live;
+      if (!L || !L.started) return;
+      var now = Date.now();
+      L.waits = (L.waits || []).filter(function (x) { return now - x < 60000; });
+      L.waits.push(now);
+      if (L.waits.length < 4) return;
+      L.waits = [];
+      if (liveHasAlt(L)) {                             // 还有别的直连候选：先换线路，不降档
+        liveMarkBad(L); L.holdUntil = now + 6000;
+        liveState("有点卡，换一条线路…");
+        return liveStart({ fresh: true, quiet: true });
+      }
+      var q = liveQnDown(L);
+      if (!q) return;
+      L.qn = q; L.stallBrokes = []; L.holdUntil = now + 6000;
+      liveState("有点卡，降到 " + (LIVE_QN_NAME[q] || q) + " 了");
+      liveStart({ fresh: true, quiet: true });
+    });
+    $("liveQn").addEventListener("change", function () {
+      if (!live) return;
+      live.qn = Number($("liveQn").value) || 10000;
+      live.stallBrokes = []; live.waits = [];
+      try { localStorage.setItem(LIVE_QN_KEY, String(live.qn)); } catch (e) {}
+      liveStart();
+    });
+  })();
+  // 直播发弹幕：
+  // 点进输入框、发出去都不暂停；发出去时带上一张截图（见下面 lshot），后端连同直播间标题、主播名拼成【bilitube·弹幕】推给聊天。
+  // 两个人的弹幕：直播页两秒问一次 api/dm/say?live=<房间>（顺便告诉后端「此刻开着这间」），属于这间房的当场走居中慢道飘。
+  // 点播那边的 saySpawn 不接直播的条目。
+  var liveSaySince = 0, liveSayTimer = 0, liveSayReady = false, liveDmQ = [], liveDmBusy = false, liveDmGen = 0;
+  function liveSayPoll() {
+    var L = live;
+    if (!L || !liveSayReady) return;
+    get("/dm/say?since=" + liveSaySince + "&live=" + encodeURIComponent(L.room) + "&ls=1" + (dmS.on ? "&pub=" + ldmSince : "")).then(function (d) {
+      if (live !== L || !d) return;
+      if (d.shotReq) lshotAnswer(L, d.shotReq);            // AI 要看一眼：回一张眼前这一刻的三帧
+      if (d.pub) ldmFeed(d.pub);                           // 直播间的公开弹幕（关了公开弹幕就不要）
+      if (typeof d.last === "number" && d.last > liveSaySince) {
+        (d.list || []).forEach(function (rec) { if (rec.film === "live:" + L.room) { liveDmEmit(rec); bDmSoon(); } });
+        liveSaySince = d.last;
+      }
+    }).catch(function () {});
+  }
+  function liveSayStart() {
+    var L = live;
+    liveSayStop();
+    if (!L) return;
+    get("/dm/say?since=0&ls=1&live=" + encodeURIComponent(L.room)).then(function (d) {   // 先对一次表，旧的不补飘
+      if (live !== L) return;
+      if (d && typeof d.last === "number") liveSaySince = d.last;
+      liveSayReady = true;
+    }).catch(function () { if (live === L) liveSayReady = true; });
+    liveSayTimer = setInterval(liveSayPoll, 2000);
+  }
+  function liveSayStop() {
+    clearInterval(liveSayTimer); liveSayTimer = 0; liveSayReady = false; liveSaySince = 0;
+    liveDmQ = []; liveDmBusy = false; liveDmGen++;
+    $("liveDm").innerHTML = "";
+  }
+  function liveDmEmit(rec) {
+    var who = rec.author === "companion" ? "companion" : "user";
+    var it = { mode: 1, kind: "say", author: who, color: rec.color || SAY_COLOR[who], text: String(rec.text || "") };
+    if (!dmHomeShown()) return;
+    if (EMBED && dmOverlayOn()) return dmOut(it);         // 嵌入中、「弹幕飘出画面」开着：交给宿主飘
+    liveDmQ.push(it);
+    if (liveDmQ.length > 8) liveDmQ.shift();
+    liveDmNext();
+  }
+  function liveDmNext() {
+    if (liveDmBusy || !liveDmQ.length) return;
+    var box = $("liveDm"), it = liveDmQ.shift(), who = it.author;
+    var el = document.createElement("span");
+    el.className = "live-dm-pill";
+    el.textContent = dmTagged(who, it.text);
+    el.style.fontSize = dmHomeFs() + "px";
+    el.style.color = it.color; el.style.background = SAY_PILL_HOME[who]; el.style.borderColor = SAY_EDGE_HOME[who];
+    box.appendChild(el);
+    liveDmBusy = true;
+    var gen = liveDmGen, over = false, done = function () {
+      if (over) return; over = true;
+      if (el.parentNode) el.parentNode.removeChild(el);
+      if (gen !== liveDmGen) return;                   // 中途收掉 / 换房了：别动新那场的队
+      liveDmBusy = false; liveDmNext();
+    };
+    var W = box.clientWidth, w = el.offsetWidth, ms = dmHomeSec() * 1000;
+    if (!el.animate) { el.style.left = "50%"; el.style.transform = "translateX(-50%)"; setTimeout(done, ms); return; }
+    var a = el.animate([{ transform: "translateX(0)" }, { transform: "translateX(" + (-(W + w)) + "px)" }],
+                       { duration: ms, easing: "linear" });
+    a.onfinish = done; a.oncancel = done;
+  }
+  // 直播截图（lshot）：从这页自己的 <video> 截，不让后端发弹幕时再去连 CDN 现抓——
+  // 后端连上拿到的是 CDN 缓存的那一段，比活边早 5～10 秒，和播放器眼前那一幕对不上；人打字的十几秒也会让它更晚。
+  // 直播在放时每秒往三格小环里画一张（只画不编码，长边 440），截图那一刻把「前两秒＋这一刻」拼成三帧竖图留着，
+  // 发出时带给后端（liveShot）。截不到（画布被污染、还没解码好）就不带，后端退回现抓。
+  var LSHOT_W = 440, LSHOT_Q = .72, LSHOT_HOLD_MS = 90000, LSHOT_B64_MAX = 190000;
+  var lshotRing = [], lshotTimer = 0, lshotHeld = null, lshotBad = false;
+  function lshotDraw(c) {                     // 把直播画面画进 c（长边 440）；画不了回 false
+    var lv = $("lv");
+    if (!lv.videoWidth || lv.readyState < 2) return false;
+    var r = Math.min(1, LSHOT_W / lv.videoWidth);
+    c.width = Math.max(2, Math.round(lv.videoWidth * r));
+    c.height = Math.max(2, Math.round(lv.videoHeight * r));
+    var x = c.getContext("2d");
+    x.drawImage(lv, 0, 0, c.width, c.height);
+    if (!c.dataset.ok) {                       // 头一张验一下画布有没有被污染（跨域没 CORS 时 getImageData 会抛）
+      try { x.getImageData(0, 0, 1, 1); c.dataset.ok = "1"; } catch (e) { lshotBad = true; return false; }
+    }
+    return true;
+  }
+  function lshotTick() {
+    var lv = $("lv");
+    if (lshotBad || document.hidden || $("live").hidden || !live) return;
+    var last = lshotRing[lshotRing.length - 1];
+    if (last && last.ct === lv.currentTime) { last.at = Date.now(); return; }   // 停着/卡着：画面没变，不重画
+    var slot = lshotRing.length >= 3 ? lshotRing.shift() : { c: document.createElement("canvas") };
+    if (!lshotDraw(slot.c)) return;
+    slot.at = Date.now(); slot.ct = lv.currentTime;
+    lshotRing.push(slot);
+  }
+  function lshotStart() { lshotStop(); lshotTimer = setInterval(lshotTick, 1000); }
+  function lshotStop() { clearInterval(lshotTimer); lshotTimer = 0; lshotRing = []; lshotHeld = null; lshotBad = false; }
+  function lshotCompose() {                    // 眼前这一刻＋环里一两秒前的 → 一张竖拼（最下面那帧是这一刻、粉框）
+    if (lshotBad || !live) return null;
+    var now = Date.now(), cur = document.createElement("canvas");
+    try { if (!lshotDraw(cur)) return null; } catch (e) { return null; }
+    var fr = lshotRing.filter(function (s) { return now - s.at >= 500 && now - s.at <= 3500; }).slice(-2)
+      .map(function (s) { return { c: s.c, ago: (now - s.at) / 1000 }; });
+    fr.push({ c: cur, ago: 0 });
+    var W = cur.width, P = 4, H = -P;
+    fr.forEach(function (f) { H += Math.round(f.c.height * W / f.c.width) + P; });
+    var out = document.createElement("canvas");
+    out.width = W; out.height = H;
+    var x = out.getContext("2d"), y = 0, fs = Math.max(11, Math.floor(W / 24));
+    x.fillStyle = "#1c1420"; x.fillRect(0, 0, W, H);
+    x.font = "bold " + fs + "px sans-serif"; x.textBaseline = "top";
+    fr.forEach(function (f, k) {
+      var h = Math.round(f.c.height * W / f.c.width);
+      x.drawImage(f.c, 0, y, W, h);
+      var lab = "LIVE " + (f.ago ? "-" + Math.round(f.ago) : "0") + "s", tw = x.measureText(lab).width;
+      x.fillStyle = "rgba(0,0,0,.55)"; x.fillRect(2, y + 2, tw + 6, fs + 6);
+      x.fillStyle = "#fff"; x.fillText(lab, 5, y + 5);
+      if (k === fr.length - 1) { x.strokeStyle = "#ff9ec4"; x.lineWidth = 3; x.strokeRect(1.5, y + 1.5, W - 3, h - 3); }
+      y += h + P;
+    });
+    return { c: out, at: now, room: live.room };
+  }
+  function lshotB64(h) {
+    try {
+      var s = h.c.toDataURL("image/jpeg", LSHOT_Q).split(",")[1] || "";
+      if (s.length > LSHOT_B64_MAX) s = h.c.toDataURL("image/jpeg", .5).split(",")[1] || "";
+      return s && s.length <= LSHOT_B64_MAX ? s : null;
+    } catch (e) { return null; }               // 被污染了：不带，后端退回现抓
+  }
+  // AI 自己「看一眼」直播时，后端在 api/dm/say 回信里挂 shotReq：当场拼一张眼前这一刻的三帧传回去
+  // （同一个号只回一次；切到后台/截不了就只回原因，后端好马上退回现抓并说清楚）。平时不传图。
+  var lshotAnswered = "";
+  function lshotAnswer(L, id) {
+    if (id === lshotAnswered) return;
+    lshotAnswered = id;
+    var err = "", b64 = null;
+    if (document.hidden || $("live").hidden) err = "hidden";
+    else if (lshotBad) err = "tainted";
+    else {
+      var h = lshotCompose();
+      b64 = h ? lshotB64(h) : null;
+      if (!b64) err = lshotBad ? "tainted" : (h ? "bad" : "nodecode");
+    }
+    post("/live/lookshot", { room: L.room, id: id, shot: b64, err: err }).catch(function () {});
+  }
+  $("liveSayText").addEventListener("focus", function () {
+    var h = lshotHeld;
+    if (h && live && h.room === live.room && $("liveSayText").value.trim() && Date.now() - h.at < LSHOT_HOLD_MS) return;  // 打了一半点出去又点回来：还算刚才那一刻
+    lshotHeld = lshotCompose();
+  });
+  // 截图按哪一刻：点进输入框那一刻先截一张；要是点进去超过 6 秒才敲第一个字（先看了一会儿才打），
+  // 就改按敲第一个字那一刻重截，免得截到的是很久以前；点进去马上打的还算点进去那一刻
+  var lshotTyped = false;
+  $("liveSayText").addEventListener("input", function () {
+    var has = !!$("liveSayText").value.trim();
+    if (!has) { lshotTyped = false; return; }
+    if (lshotTyped) return;
+    lshotTyped = true;
+    if (!lshotHeld || Date.now() - lshotHeld.at > 6000) lshotHeld = lshotCompose();
+  });
+  $("liveSayText").addEventListener("blur", function () {
+    setTimeout(function () { if (!$("liveSayText").value.trim() && !$("liveSayBtn").disabled) lshotHeld = null; }, 200);
+  });
+  $("liveSayBar").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var L = live, txt = $("liveSayText").value.trim();
+    if (!txt || !L) return;
+    $("liveSayBtn").disabled = true;
+    var i = L.info || {}, h = lshotHeld;
+    if (!h || h.room !== L.room || Date.now() - h.at > LSHOT_HOLD_MS) h = lshotCompose();   // 没点输入框就发 / 隔太久：至少是眼前这一刻
+    var shot = h ? lshotB64(h) : null;
+    var where = { film: "live:" + L.room, live: true, room: L.room, title: i.title || "", uname: i.uname || "" };
+    if (shot) { where.shotFrom = "page"; where.focusAgo = Math.round((Date.now() - h.at) / 100) / 10; }
+    post("/dm/say", { text: txt, author: "user", liveShot: shot, bilitube: where })
+      .then(function (r) {
+        $("liveSayBtn").disabled = false;
+        if (r && r.ok) { lshotHeld = null; lshotTyped = false; $("liveSayText").value = ""; $("liveSayText").blur(); liveSayPoll(); bDmSoon(); }
+        else toast((r && r.error) || "没发出去");
+      }).catch(function () { $("liveSayBtn").disabled = false; toast("没发出去"); });
+  });
+  // ══════════════════════════════════════════════════════════════
+  // 弹幕画布：B 站的公开弹幕和两个人的弹幕都画在 #dm 这一块 canvas 上，零依赖。
+  // 点播的钟用 video.currentTime，所以暂停自动冻住、拖进度条自动重排。
+  // ══════════════════════════════════════════════════════════════
+  var STAY_SEC = 4, PER_SEC = 30;
+  var dmCv = $("dm"), dmCtx = null, dmW = 0, dmH = 0, dmDpr = 0;
+  var dmItems = [], dmActive = [], dmCursor = 0, dmLastT = -1, dmRaf = 0;
+  var dmBucket = -1, dmBucketN = 0;
+
+  // 弹幕设置只认面板这一份（localStorage: bilitube_dm_settings）。
+  // on 只管 B 站弹幕——两个人的弹幕和批注不受开关、筛子影响；要连它们也不飘，得把「总是显示」也关掉。
+  var DM_DEF = { on: true, alpha: .85, size: 1, speed: 1, area: 1,
+                 blockTop: false, blockBottom: false, blockScroll: false, blockColor: false,
+                 keywords: "", merge: true, max: 80,
+                 homeAlways: true, homeSpeed: .6 };   // 两个人的弹幕：关了 B 站弹幕也飘 / 居中慢道的速度（相对普通 1× 的 8 秒）
+  var dmS = dmLoadSettings();
+  function dmClamp(v, lo, hi, d) { v = parseFloat(v); return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; }
+  function dmLoadSettings() {
+    var o = {}; for (var k in DM_DEF) o[k] = DM_DEF[k];
+    try {
+      var raw = localStorage.getItem("bilitube_dm_settings");
+      if (raw) {
+        var j = JSON.parse(raw) || {};
+        for (var k2 in DM_DEF) if (k2 in j) o[k2] = j[k2];
+      } else {
+        // 更早的两把单项钥匙（bilitube.dm / bilitube.dmAlpha）还在的话搬进来
+        var sv = localStorage.getItem("bilitube.dm");
+        if (sv !== null) o.on = sv !== "0";
+        var sa = localStorage.getItem("bilitube.dmAlpha");
+        if (sa) o.alpha = parseFloat(sa) || .85;
+      }
+    } catch (e) {}
+    o.on = !!o.on; o.merge = !!o.merge;
+    o.alpha = dmClamp(o.alpha, .2, 1, .85); o.size = dmClamp(o.size, .7, 1.4, 1);
+    o.speed = dmClamp(o.speed, .5, 2, 1); o.area = dmClamp(o.area, .25, 1, 1);
+    o.max = Math.round(dmClamp(o.max, 10, 200, 80));
+    o.homeAlways = o.homeAlways !== false; o.homeSpeed = dmClamp(o.homeSpeed, .3, 1, .6);
+    o.keywords = String(o.keywords || "");
+    ["blockTop", "blockBottom", "blockScroll", "blockColor"].forEach(function (k3) { o[k3] = !!o[k3]; });
+    return o;
+  }
+  function dmSaveSettings() { try { localStorage.setItem("bilitube_dm_settings", JSON.stringify(dmS)); } catch (e) {} }
+  try { if (!localStorage.getItem("bilitube_dm_settings")) dmSaveSettings(); } catch (e) {}   // 旧钥匙搬完就落一次
+
+  function dmFont() { return (window.innerWidth <= 420 ? 16 : 20) * dmS.size; }
+  function scrollSec() { return 8 / dmS.speed; }
+
+  function dmSize() {
+    var st = dmCv.parentNode;
+    var w = st.clientWidth, h = st.clientHeight;
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (w < 2 || h < 2) return false;
+    if (w === dmW && h === dmH && dpr === dmDpr) return true;
+    dmW = w; dmH = h; dmDpr = dpr;
+    dmCv.width = Math.round(w * dpr); dmCv.height = Math.round(h * dpr);
+    dmCtx = dmCv.getContext("2d");
+    dmCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    dmActive = [];                 // 尺寸变了，排版作废，重新飘
+    return true;
+  }
+
+  function dmReset(t) {
+    dmActive = []; dmBucket = -1; dmBucketN = 0;
+    var lo = 0, hi = dmItems.length;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (dmItems[mid].t < t) lo = mid + 1; else hi = mid; }
+    dmCursor = lo; dmLastT = t;
+    if (dmCtx) dmCtx.clearRect(0, 0, dmW, dmH);
+  }
+
+  // 轨道分两池：滚动(1)和顶部(5)共用「上池」——两套轨要是各自从顶上开始排，
+  // 顶部弹幕正好糊在滚动弹幕上；底部(4)自己一个「下池」。
+  function dmLanes() {
+    var lh = dmFont() * 1.35;
+    var all = Math.max(1, Math.floor((dmH - 10) / lh));
+    var area = Math.max(1, Math.floor((dmH * dmS.area - 10) / lh));   // 显示区域：上池只用画面上面这一截
+    return { lh: lh, top: Math.max(1, Math.min(all, area, 14)),
+             bot: Math.max(1, Math.min(all, 3)) };
+  }
+  function dmPool(mode) { return mode === 4 ? "bot" : "top"; }
+
+  // ── 两个人的弹幕：居中慢道 ──
+  // 发弹幕框发的、AI 发的（kind:"say"）不进 B 站那两池，进画面垂直中线上一条专用轨：
+  // 一次只走一条、排队；字大一档（×1.35）；钟用墙上的钟不用 video.currentTime——
+  // 发弹幕时片子会停在那一秒等回话，要是跟着片子的钟走，两个人的话都会冻在画面右边外头。
+  // 中线这一带对 B 站弹幕是禁区（dmPick 跳过压到它的 lane），所以飘过时没人盖上来。
+  var HOME_SIZE = 1.35, HOME_BASE = 8, HOME_Q_MAX = 6, HOME_LAST_MS = 3000;
+  var dmHomeQ = [], dmHomeCur = null;
+  function dmHomeSec() { return HOME_BASE / dmS.homeSpeed; }
+  function dmHomeFs() { return Math.round(dmFont() * HOME_SIZE); }
+  function dmHomeBox() {
+    var fs = dmHomeFs(), ph = fs + 12, py = Math.round(dmH / 2 - ph / 2);
+    return { fs: fs, ph: ph, py: py, ty: py + 6,
+             z0: Math.min(py, dmH * .46) - 3, z1: Math.max(py + ph, dmH * .54) + 3 };
+  }
+  function dmLaneHitsHome(pool, lane, L) {
+    var y0 = pool === "bot" ? dmH - 8 - (lane + 1) * L.lh : 5 + lane * L.lh, y1 = y0 + L.lh;
+    var z = dmHomeBox();
+    return y1 > z.z0 && y0 < z.z1;
+  }
+  function dmHomeShown() { return dmS.on || dmS.homeAlways; }
+
+  function dmBusy(a, t, forMode) {
+    if (a.mode === 1) {
+      var ax = dmW - ((t - a.t0) / scrollSec()) * (dmW + a.w);
+      // 新的也是滚动：等前一条整个进屏就能跟上；新的是静止：整条轨得空着
+      return forMode === 1 ? (ax + a.w > dmW - 10) : (ax + a.w > 0);
+    }
+    return true;                                            // 顶/底弹幕占满整条轨
+  }
+
+  function dmPick(it, t) {
+    var L = dmLanes(), pool = dmPool(it.mode);
+    var n = pool === "bot" ? L.bot : L.top;
+    for (var lane = 0; lane < n; lane++) {
+      if (dmLaneHitsHome(pool, lane, L)) continue;          // 中线让给两个人的弹幕
+      var busy = false;
+      for (var i = 0; i < dmActive.length; i++) {
+        var a = dmActive[i];
+        if (dmPool(a.mode) !== pool || a.lane !== lane) continue;
+        if (dmBusy(a, t, it.mode)) { busy = true; break; }
+      }
+      if (!busy) return lane;
+    }
+    return -1;                                              // 挤爆了，这条就不飘了
+  }
+
+  function dmOurs(it) { return it.kind === "note" || it.kind === "say"; }
+  function dmLabel(it) {
+    return dmOurs(it) ? dmTagged(it.author, it.text)
+                      : (it.label || it.text);
+  }
+  var DM_PAD = 11;                       // 药丸左右各留这么多
+  function dmFam() { return getComputedStyle(document.body).fontFamily || "sans-serif"; }
+  function dmFontFor(ours) { return "600 " + Math.round(dmFont() * (ours ? 1.18 : 1)) + "px " + dmFam(); }
+
+  function dmEmit(it, t) {
+    if (it.kind === "say" && !dmHomeShown()) return;     // B 站弹幕和「总是显示」都关了才不飘
+    // 「弹幕飘出画面」：嵌入中、开关又开着时，这一条交给宿主在整页宽度上飘（bilitube:dm），
+    // 画面里的 canvas 就不画了——同一条弹幕只许有一个影子。
+    if (EMBED && dmOverlayOn()) { dmOut(it); return; }
+    if (it.kind === "say") {                              // 两个人的走居中慢道，排队
+      dmHomeQ.push({ text: dmLabel(it), color: it.color, author: it.author });
+      if (dmHomeQ.length > HOME_Q_MAX) dmHomeQ.shift();
+      return;
+    }
+    if (!dmCtx) return;
+    var ours = dmOurs(it);
+    dmCtx.font = dmFontFor(ours);
+    var label = dmLabel(it);
+    var w = dmCtx.measureText(label).width + (ours ? DM_PAD * 2 : 0);   // 两个人的连药丸一起占位
+    var lane = dmPick({ mode: it.mode, w: w }, t);
+    if (lane < 0) return;
+    dmActive.push({ text: label, color: it.color, mode: it.mode, kind: it.kind,
+                    author: it.author, ours: ours, w: w, lane: lane, t0: t });
+    if (dmActive.length > 260) dmActive.shift();
+  }
+  function dmBiliOnScreen() {
+    var n = 0;
+    for (var i = 0; i < dmActive.length; i++) {
+      if (dmActive[i].kind !== "note" && dmActive[i].kind !== "say") n++;
+    }
+    return n;
+  }
+
+  function dmFrame() {
+    dmRaf = 0;
+    if (dmLiveOn()) { dmLiveFrame(); return; }   // 直播开着：同一块画布、同一套轨道，钟换成墙上的钟
+    var v = $("v");
+    if (!cur || v.hidden) return;
+    if (!dmSize()) { dmRaf = requestAnimationFrame(dmFrame); return; }
+    var t = v.currentTime || 0;
+    if (t < dmLastT - 0.25 || t > dmLastT + 1.2) dmReset(t);   // 拖进度条了
+    // 放出到点的弹幕（B 站的看开关和密度上限；批注和两个人的一律放行）
+    while (dmCursor < dmItems.length && dmItems[dmCursor].t <= t) {
+      var it = dmItems[dmCursor++];
+      if (it.t < dmLastT - 0.5) continue;
+      if (it.liveAt && performance.now() - it.liveAt < 15000) continue;   // 刚当场飘过这条，别再飘一遍
+      if (it.kind !== "note" && it.kind !== "say") {
+        if (!dmS.on) continue;
+        if (dmBiliOnScreen() >= dmS.max) continue;
+      }
+      var b = Math.floor(t);
+      if (b !== dmBucket) { dmBucket = b; dmBucketN = 0; }
+      if (it.kind === "note" || it.kind === "say" || dmBucketN < PER_SEC) {
+        dmEmit(it, t); if (it.kind !== "note" && it.kind !== "say") dmBucketN++;
+      }
+    }
+    dmLastT = t;
+    dmPaint(t);
+    dmHomeDraw();
+    dmRaf = requestAnimationFrame(dmFrame);
+  }
+  function dmPaint(t) {
+    var L = dmLanes(), SC = scrollSec();
+    dmCtx.clearRect(0, 0, dmW, dmH);
+    dmCtx.font = "600 " + dmFont() + "px " + (getComputedStyle(document.body).fontFamily || "sans-serif");
+    dmCtx.textBaseline = "top";
+    dmCtx.lineWidth = 3; dmCtx.lineJoin = "round";
+    var keep = [];
+    for (var i = 0; i < dmActive.length; i++) {
+      var a = dmActive[i], el = t - a.t0, x, y;
+      if (el < 0) continue;
+      if (a.mode === 1) {
+        if (el > SC) continue;
+        x = dmW - (el / SC) * (dmW + a.w);
+        y = 5 + a.lane * L.lh;
+        if (x + a.w < -4) continue;
+      } else {
+        if (el > STAY_SEC) continue;
+        x = (dmW - a.w) / 2;
+        y = a.mode === 5 ? 5 + a.lane * L.lh : dmH - 8 - (a.lane + 1) * L.lh;
+      }
+      // 透明度只调 B 站的；批注和两个人的弹幕永远是实的
+      dmCtx.globalAlpha = a.ours ? 1 : dmS.alpha;
+      if (a.ours) {
+        // 大一档 ＋ 一颗圆角药丸的淡底（纯色 rgba，零渐变），和满屏的 B 站弹幕一眼分开
+        dmCtx.font = dmFontFor(true);
+        var fs = Math.round(dmFont() * 1.18), ph = fs + 10, py = y - 4;
+        dmCtx.fillStyle = SAY_PILL[a.author === "companion" ? "companion" : "user"] || SAY_PILL.companion;
+        dmCtx.beginPath();
+        if (dmCtx.roundRect) dmCtx.roundRect(x, py, a.w, ph, ph / 2);
+        else dmCtx.rect(x, py, a.w, ph);
+        dmCtx.fill();
+        dmCtx.fillStyle = a.color;
+        dmCtx.fillText(a.text, x + DM_PAD, y);
+        dmCtx.font = dmFontFor(false);
+      } else {
+        dmCtx.strokeStyle = "rgba(0,0,0,.78)";
+        dmCtx.strokeText(a.text, x, y);
+        dmCtx.fillStyle = a.color;
+        dmCtx.fillText(a.text, x, y);
+      }
+      keep.push(a);
+    }
+    dmActive = keep;
+    dmCtx.globalAlpha = 1;
+  }
+
+  // 居中慢道那条：药丸 .55 实一点 ＋ 1px 同色细边，字大一档 ＋ 暗描边（亮画面上也看得清）
+  function dmHomeDraw() {
+    var now = performance.now() / 1000, SEC = dmHomeSec();
+    if (dmHomeCur && now - dmHomeCur.t0 > SEC) { dmLastShow(dmHomeCur); dmHomeCur = null; }
+    if (!dmHomeCur && dmHomeQ.length) { dmHomeCur = dmHomeQ.shift(); dmHomeCur.t0 = now; }
+    if (!dmHomeCur) return;
+    var a = dmHomeCur, box = dmHomeBox(), who = a.author === "companion" ? "companion" : "user";
+    dmCtx.font = "600 " + box.fs + "px " + dmFam();
+    var w = dmCtx.measureText(a.text).width + DM_PAD * 2 + 4;   // 每帧量：换字号/转屏也跟得上
+    var x = dmW - ((now - a.t0) / SEC) * (dmW + w);
+    dmCtx.globalAlpha = 1;
+    dmCtx.beginPath();
+    if (dmCtx.roundRect) dmCtx.roundRect(x + .5, box.py + .5, w - 1, box.ph - 1, box.ph / 2);
+    else dmCtx.rect(x + .5, box.py + .5, w - 1, box.ph - 1);
+    dmCtx.fillStyle = SAY_PILL_HOME[who];
+    dmCtx.fill();
+    dmCtx.lineWidth = 1; dmCtx.strokeStyle = SAY_EDGE_HOME[who];
+    dmCtx.stroke();
+    dmCtx.lineWidth = 2; dmCtx.lineJoin = "round"; dmCtx.strokeStyle = "rgba(34,20,38,.9)";
+    dmCtx.strokeText(a.text, x + DM_PAD + 2, box.ty);
+    dmCtx.fillStyle = a.color;
+    dmCtx.fillText(a.text, x + DM_PAD + 2, box.ty);
+    dmCtx.lineWidth = 3;
+    dmCtx.font = dmFontFor(false);
+  }
+  function dmHomeClear() { dmHomeQ = []; dmHomeCur = null; }
+
+  // 飘完在右下角留 3 秒「最近一条」小签（低头打字错过了还能看到）
+  var dmLastTimer = 0;
+  function dmLastShow(a) {
+    var el = $("dmLast");
+    if (!el || !a) return;
+    el.textContent = a.text;
+    el.dataset.on = "1";
+    clearTimeout(dmLastTimer);
+    dmLastTimer = setTimeout(function () { el.dataset.on = "0"; }, HOME_LAST_MS);
+  }
+
+  function dmStart() {
+    if (dmRaf) return;
+    if (!cur && !dmLiveOn()) return;
+    dmRaf = requestAnimationFrame(dmFrame);
+  }
+  function dmStop() {
+    if (dmRaf) cancelAnimationFrame(dmRaf);
+    dmRaf = 0;
+    if (dmCtx && dmW) dmCtx.clearRect(0, 0, dmW, dmH);
+  }
+
+  // ── 直播的公开弹幕：服务器替这页连着那间房的弹幕长连接，直播页两秒一问 api/dm/say?live=&pub= 时捎回最近几条。
+  // 画布还是上面这一块（直播开着时搬进直播画面，收掉再搬回来），轨道、样式、开关、弹幕设置面板都共用；
+  // 钟用墙上的钟。限流三道：服务器每问最多给 40 条；这里排队最多 LDM_Q_MAX 条、落后 LDM_STALE 毫秒的丢；
+  // 上屏照点播的规矩——每秒最多 PER_SEC 条、同屏不超过「密度上限」、轨道满了就不飘。
+  var LDM_DELAY = 2200, LDM_Q_MAX = 120, LDM_STALE = 4000;
+  var ldmQ = [], ldmSince = 0, ldmHome = null, ldmSeen = {}, ldmSeenN = 0, ldmKwSrc = null, ldmKw = [];
+  function dmLiveOn() { return !!live && !!live.pub && !$("live").hidden; }
+  function ldmStart() {
+    if (!live) return;
+    var box = $("liveDm");
+    if (!ldmHome) ldmHome = { p: dmCv.parentNode, n: dmCv.nextSibling };
+    box.parentNode.insertBefore(dmCv, box);              // 两个人的那条慢道（DOM）照旧压在上面
+    dmStop(); dmActive = []; dmW = 0; dmBucket = -1; dmBucketN = 0;
+    ldmQ = []; ldmSince = 0; ldmSeen = {}; ldmSeenN = 0;
+    live.pub = true;
+    dmStart();
+  }
+  function ldmStop() {
+    if (live) live.pub = false;
+    ldmQ = []; ldmSeen = {}; ldmSeenN = 0;
+    dmStop(); dmActive = []; dmW = 0;
+    if (ldmHome && ldmHome.p) ldmHome.p.insertBefore(dmCv, ldmHome.n && ldmHome.n.parentNode === ldmHome.p ? ldmHome.n : null);
+  }
+  function ldmFeed(pd) {
+    if (!pd || !dmLiveOn()) return;
+    if (typeof pd.last === "number") ldmSince = pd.last;
+    if (!dmS.on) return;
+    var now = performance.now();
+    (pd.list || []).forEach(function (d) {
+      var text = String(d.text || "").trim();
+      if (!text) return;
+      ldmQ.push({ due: now + Math.max(0, LDM_DELAY - (Number(d.ago) || 0)), text: text,
+                  mode: d.mode === 4 || d.mode === 5 ? d.mode : 1, color: typeof d.color === "number" ? d.color : 0xffffff });
+    });
+    if (ldmQ.length > LDM_Q_MAX) ldmQ.splice(0, ldmQ.length - LDM_Q_MAX);
+  }
+  function dmLiveFrame() {
+    if (!dmSize()) { dmRaf = requestAnimationFrame(dmFrame); return; }
+    var now = performance.now(), t = now / 1000;
+    if (ldmKwSrc !== dmS.keywords) { ldmKwSrc = dmS.keywords; ldmKw = dmKeywords(); }
+    while (ldmQ.length && ldmQ[0].due <= now) {
+      var d = ldmQ.shift();
+      if (now - d.due > LDM_STALE || !dmS.on || !dmPass(d)) continue;
+      var low = d.text.toLowerCase(), hit = false;
+      for (var i = 0; i < ldmKw.length; i++) if (low.indexOf(ldmKw[i]) >= 0) { hit = true; break; }
+      if (hit) continue;
+      var key = d.text, m = ldmSeen[key];
+      if (dmS.merge && m && t - m.t <= 10) continue;      // 「重复合并」开着：10 秒内同一句只飘头一条（直播里不改字，改了会变宽撞上后面那条）
+      if (dmBiliOnScreen() >= dmS.max) continue;
+      var b = Math.floor(t);
+      if (b !== dmBucket) { dmBucket = b; dmBucketN = 0; }
+      if (dmBucketN >= PER_SEC) continue;
+      dmEmit({ mode: d.mode, color: hex(d.color), text: d.text, kind: "bili" }, t);
+      dmBucketN++;
+      if (++ldmSeenN > 600) { ldmSeen = {}; ldmSeenN = 0; }
+      ldmSeen[key] = { t: t };
+    }
+    dmPaint(t);
+    dmRaf = requestAnimationFrame(dmFrame);
+  }
+
+  function hex(n) {
+    n = (typeof n === "number" && isFinite(n)) ? (n & 0xffffff) : 0xffffff;
+    return "#" + ("000000" + n.toString(16)).slice(-6);
+  }
+
+  // 时间轴 = B 站弹幕 ＋ 批注（顶部弹幕，各用各的颜色）＋ AI 的弹幕记录。
+  // B 站的先过一遍面板里的筛子（类型 / 彩色 / 关键词），再按 10 秒窗口把一样的话合并成 ×N
+  function dmKeywords() {
+    return String(dmS.keywords || "").split(/[,，\n\r;；]+/).map(function (k) { return k.trim().toLowerCase(); }).filter(Boolean);
+  }
+  function dmPass(d) {
+    var mode = d.mode || 1;
+    if (mode === 5 && dmS.blockTop) return false;
+    if (mode === 4 && dmS.blockBottom) return false;
+    if (mode === 1 && dmS.blockScroll) return false;
+    if (dmS.blockColor && typeof d.color === "number" && (d.color & 0xffffff) !== 0xffffff) return false;
+    return true;
+  }
+  function dmRebuild(raw) {
+    if (raw) dmRawList = raw;
+    var kws = dmKeywords(), kept = 0;
+    var out = [];
+    (dmRawList || []).forEach(function (d) {
+      if (!dmPass(d)) return;
+      var text = String(d.text || "");
+      if (kws.length) {
+        var low = text.toLowerCase();
+        for (var i = 0; i < kws.length; i++) if (low.indexOf(kws[i]) >= 0) return;
+      }
+      out.push({ t: d.t || 0, mode: d.mode || 1, color: hex(d.color), text: text, kind: "bili" });
+    });
+    out.sort(function (a, b) { return a.t - b.t; });
+    if (dmS.merge) {
+      var last = {}, merged = [];
+      out.forEach(function (it) {
+        var key = it.text.trim(), l = last[key];
+        if (l && it.t - l.t <= 10) { l.n++; l.label = l.text + " ×" + l.n; }
+        else { it.n = 1; last[key] = it; merged.push(it); }
+      });
+      out = merged;
+    }
+    kept = out.length;
+    (notes || []).forEach(function (n) {
+      out.push({ t: n.t || 0, mode: 5, kind: "note", author: n.author,
+                 color: n.author === "companion" ? "#cfc6e4" : "#ffb5cf", text: n.text });
+    });
+    (companionLog || []).forEach(function (n) { out.push(companionItem(n)); });
+    out.sort(function (a, b) { return a.t - b.t; });
+    dmItems = out;
+    var total = (dmRawList || []).length;
+    $("dmsN").textContent = total ? (kept !== total ? kept + "/" + total : String(total)) : "0";
+    dmReset($("v").currentTime || 0);
+  }
+  var dmRawList = [];
+
+  // ── 弹幕设置面板（住在抽屉里「弹幕设置」那一段）──
+  function dmPanelOpen(on) {
+    $("dmPanel").hidden = !on;
+    if (on) dmPanelSync();
+  }
+  function dmPanelSync() {
+    $("dmsOn").checked = dmS.on;
+    $("dmsAlpha").value = Math.round(dmS.alpha * 100); $("dmsAlphaV").textContent = Math.round(dmS.alpha * 100) + "%";
+    $("dmsSize").value = Math.round(dmS.size * 100); $("dmsSizeV").textContent = dmS.size.toFixed(1) + "×";
+    $("dmsSpeed").value = Math.round(dmS.speed * 100); $("dmsSpeedV").textContent = dmS.speed.toFixed(1) + "×";
+    Array.prototype.forEach.call($("dmsArea").querySelectorAll("button"), function (b) {
+      b.dataset.on = Math.abs(parseFloat(b.dataset.v) - dmS.area) < .01 ? "1" : "0";
+    });
+    $("dmsBlockTop").checked = dmS.blockTop; $("dmsBlockBottom").checked = dmS.blockBottom;
+    $("dmsBlockScroll").checked = dmS.blockScroll; $("dmsBlockColor").checked = dmS.blockColor;
+    $("dmsMax").value = dmS.max; $("dmsMaxV").textContent = String(dmS.max);
+    $("dmsMerge").checked = dmS.merge;
+    $("dmsHome").checked = dmS.homeAlways;
+    $("dmsHomeSpeed").value = Math.round(dmS.homeSpeed * 100);
+    $("dmsHomeSpeedV").textContent = dmS.homeSpeed.toFixed(2).replace(/0$/, "") + "×";
+    $("dmsHomeSpeedV").title = "横穿画面约 " + Math.round(dmHomeSec()) + " 秒";
+    if (document.activeElement !== $("dmsKw")) $("dmsKw").value = dmS.keywords;
+  }
+  // 改了就生效：布局类（字号/速度/区域）清屏重飘；筛子类（类型/关键词/合并）整份重排；开关直接把 B 站的擦掉
+  function dmApply(kind) {
+    dmSaveSettings();
+    if (kind === "layout") dmActive = [];
+    else if (kind === "filter") dmRebuild();
+    else if (kind === "on") {
+      if (!dmS.on) dmActive = dmActive.filter(function (a) { return a.kind === "note"; });
+      else dmReset($("v").currentTime || 0);
+      if (!dmHomeShown()) dmHomeClear();
+    }
+    dmPanelSync();
+    dmStart();
+  }
+  function dmSetOn(on) { dmS.on = !!on; dmApply("on"); }
+  $("dmsOn").addEventListener("change", function () { dmSetOn(this.checked); });
+  $("dmsAlpha").addEventListener("input", function () { dmS.alpha = dmClamp(this.value / 100, .2, 1, .85); dmApply("paint"); });
+  $("dmsSize").addEventListener("input", function () { dmS.size = dmClamp(this.value / 100, .7, 1.4, 1); dmApply("layout"); });
+  $("dmsSpeed").addEventListener("input", function () { dmS.speed = dmClamp(this.value / 100, .5, 2, 1); dmApply("layout"); });
+  $("dmsArea").addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return;
+    dmS.area = dmClamp(b.dataset.v, .25, 1, 1); dmApply("layout");
+  });
+  [["dmsBlockTop", "blockTop"], ["dmsBlockBottom", "blockBottom"], ["dmsBlockScroll", "blockScroll"], ["dmsBlockColor", "blockColor"], ["dmsMerge", "merge"]]
+    .forEach(function (pair) {
+      $(pair[0]).addEventListener("change", function () { dmS[pair[1]] = this.checked; dmApply("filter"); });
+    });
+  $("dmsHome").addEventListener("change", function () { dmS.homeAlways = this.checked; dmApply("on"); });
+  $("dmsHomeSpeed").addEventListener("input", function () { dmS.homeSpeed = dmClamp(this.value / 100, .3, 1, .6); dmApply("paint"); });
+  $("dmsMax").addEventListener("input", function () { dmS.max = Math.round(dmClamp(this.value, 10, 200, 80)); dmApply("paint"); });
+  var kwTimer = 0;
+  $("dmsKw").addEventListener("input", function () {
+    var el = this; clearTimeout(kwTimer);
+    kwTimer = setTimeout(function () { dmS.keywords = el.value.slice(0, 2000); dmApply("filter"); }, 300);
+  });
+  $("dmsReset").addEventListener("click", function () {
+    for (var k in DM_DEF) dmS[k] = DM_DEF[k];
+    dmApply("filter"); dmActive = []; toast("弹幕设置回到默认");
+  });
+  $("dmPanel").addEventListener("click", function (e) { e.stopPropagation(); });
+  document.addEventListener("click", function () { if (!$("dmPanel").hidden) dmPanelOpen(false); });
+  dmPanelSync();
+  window.addEventListener("resize", function () { if (cur) dmSize(); });
+
+  // ══════════════════════════════════════════════════════════════
+  // 评论区（只读；默认展开，先露 5 条热评，见 bCmtFold）
+  // ══════════════════════════════════════════════════════════════
+  function cmtOpen(on) {
+    $("cmt").dataset.open = on ? "1" : "0";
+    $("cmtBody").hidden = !on;
+    tellSize();          // 展开、收起两个方向都报给宿主
+  }
+  $("cmtHead").addEventListener("click", function () {
+    cmtOpen($("cmtBody").hidden);
+  });
+
+  function loadComments(f) {
+    $("cmt").hidden = true; $("cmtBody").innerHTML = "";
+    if (EMBED) bFoldLabel(0);
+    if (!f.hasComments) return;
+    get("/comments?film=" + encodeURIComponent(f.id)).then(function (d) {
+      var list = (d && d.comments) || [];
+      if (!list.length || !cur || cur.id !== f.id) return;
+      $("cmt").hidden = false;
+      $("cmtN").textContent = "· " + list.length + " 条热评";
+      var box = $("cmtBody");
+      list.forEach(function (c) {
+        var el = document.createElement("div");
+        el.className = "c1";
+        el.innerHTML = '<div><span class="who"></span><span class="like"></span></div><div class="tx clip"></div>';
+        el.querySelector(".who").textContent = c.user;
+        // Lucide thumbs-up，线宽 1.8
+        el.querySelector(".like").innerHTML =
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>' +
+          '<span></span>';
+        el.querySelector(".like span").textContent = String(c.like || 0);
+        el.querySelector(".like").title = "点赞 " + (c.like || 0);
+        var tx = el.querySelector(".tx");
+        tx.textContent = c.text;
+        if ((c.text || "").length > 60 || (c.text || "").indexOf("\n") >= 0) {
+          var mb = document.createElement("button");
+          mb.className = "more"; mb.type = "button"; mb.textContent = "展开";
+          mb.addEventListener("click", function () {
+            var on = tx.classList.toggle("clip");
+            mb.textContent = on ? "展开" : "收起";
+          });
+          el.appendChild(mb);
+        } else { tx.classList.remove("clip"); }
+        (c.replies || []).forEach(function (r) {
+          var rr = document.createElement("div");
+          rr.className = "c2";
+          rr.innerHTML = "<b></b><span></span>";
+          rr.querySelector("b").textContent = r.user + "：";
+          rr.querySelector("span").textContent = r.text;
+          el.appendChild(rr);
+        });
+        box.appendChild(el);
+      });
+      cmtOpen(true);
+      if (EMBED) bFoldLabel(list.length);
+      bCmtFold();
+    }).catch(function () {});
+  }
+
+  function loadDanmaku(f) {
+    dmRawList = []; dmItems = []; dmActive = [];
+    if (!f.hasDanmaku) { dmRebuild([]); return; }
+    get("/danmaku?film=" + encodeURIComponent(f.id)).then(function (d) {
+      if (!cur || cur.id !== f.id) return;
+      dmRebuild((d && d.danmaku) || []);
+      dmStart();
+    }).catch(function () {});
+  }
+
+  // 收藏 / 点赞两枚图标（Lucide，线宽 1.8）和标题下那行小字用的两个格式化
+  var BP_ICON = {
+    heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+    like: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>'
+  };
+  function bpPlays(n) {                       // 播放量：12345 → 1.2万
+    n = Number(n);
+    if (!isFinite(n) || n <= 0) return "";
+    if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, "") + "亿";
+    if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, "") + "万";
+    return String(Math.round(n));
+  }
+  function bpDay(v) {                         // 发布日期：今年的只写 月-日
+    if (v == null || v === "") return "";
+    var d;
+    if (typeof v === "number" || /^\d{9,13}$/.test(String(v))) { var x = Number(v); d = new Date(x < 1e12 ? x * 1000 : x); }
+    else { var m = String(v).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (!m) return ""; d = new Date(+m[1], +m[2] - 1, +m[3]); }
+    if (isNaN(d)) return "";
+    var md = ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+    return d.getFullYear() === new Date().getFullYear() ? md : d.getFullYear() + "-" + md;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 稍后再看（抽屉里「稍后再看」那一段）：待看的单子只有一份＝用户 B 站账号的稍后再看。每次打开现问 /api/bili/watchlater，
+  // 点一条就地换片，× 从 B 站稍后再看里移出（点两下）。单纯点开看过的片子不进任何单子。本地片排在最后一小段。
+  // 点一部就地换片（不拆 <video>、不退出这页），× 点两下删掉一部。
+  // 每次展开都现问一次 api/films——AI 那边经服务器加进来的片子，这里一展开就看得见，不吃本地缓存。
+  // ══════════════════════════════════════════════════════════════
+  function plNote(t) { var n = $("plNote"); n.textContent = t || ""; n.hidden = !t; }
+  function coverDirect(u, w, h) {   // B 站图床直连小图（整页 no-referrer，图床放行），拿不到退回代理
+    u = String(u || "").replace(/^http:\/\//, "https://").replace(/^\/\//, "https://");
+    return /^https:\/\/[a-z0-9.-]+\.hdslb\.com\//.test(u) && u.indexOf("@") < 0 ? u + "@" + w + "w_" + h + "h_1c.webp" : "";
+  }
+
+  function plRow(f, later) {
+    var row = document.createElement("div");
+    row.className = "pl-row"; row.setAttribute("role", "button"); row.tabIndex = 0;
+    var fid = later ? (later.film || (later.bvid ? "bili:" + later.bvid : "")) : f.id;
+    if (cur && cur.id === fid) row.dataset.on = "1";
+    row.innerHTML = '<div class="cv"></div><div class="tx"><div class="t"></div>' +
+      '<div class="m"><span class="a"></span><span class="b"></span></div></div>' +
+      '<button class="x" type="button" aria-label="' + (later ? "移出稍后再看" : "删掉这部本地片") + '">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>';
+    var it = later || f;
+    row.querySelector(".t").textContent = it.title || fid;
+    row.querySelector(".a").textContent = later ? (later.up || "") : "本地片";
+    row.querySelector(".b").textContent = later ? (later.progress || later.duration || "") : (f.duration ? fmt(f.duration) : "");
+    var prox = later ? (later.cover_url && later.bvid ? API + "/bili/listcover?bvid=" + encodeURIComponent(later.bvid) +
+      "&u=" + encodeURIComponent(later.cover_url) : "") : f.poster;
+    var dir = later ? coverDirect(later.cover_url, 320, 180) : "";
+    if (dir || prox) {                 // 用 <img referrerpolicy=no-referrer>：CSS 背景图实测照样带 Referer，图床回 403（Chrome 当场 ORB 拦掉）
+      var im = document.createElement("img");
+      im.alt = ""; im.loading = "lazy"; im.decoding = "async"; im.referrerPolicy = "no-referrer";
+      im.onerror = function () { if (dir && prox && im.src !== prox) { im.src = prox; } else im.remove(); };
+      im.src = dir || prox;
+      row.querySelector(".cv").appendChild(im);
+    }
+    if (upNext && upNext.film === fid) row.querySelector(".a").textContent = palName() + "排的下一个" + (later && later.up ? " · " + later.up : "");
+    row.addEventListener("click", function () {
+      bSheetClose();
+      if (cur && cur.id === fid) { plOpen(false); return; }
+      plOpen(false);
+      if (!later) return open(f);                          // 就地换片：player 一直开着，不退回主页
+      var ref = later.film && /^bili:ep\d+$/.test(later.film) ? later.film.slice(5) : later.bvid;
+      if (!ref) return toast("这条不是视频");
+      post("/bili/add", { ref: ref, direct: 1 }).then(function (r) {
+        if (!(r && r.ok && r.film)) return toast((r && r.error) || "没接上");
+        if (r.direct && r.direct.ok) directPre[r.film.id] = { d: r.direct, at: Date.now() };
+        open(r.film, { play: true });
+      }).catch(function () { toast("没接上"); });
+    });
+    row.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); }
+    });
+    row.querySelector(".x").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var b = e.currentTarget;
+      if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.title = "再点一下"; toast(later ? "再点一下 × 就移出稍后再看" : "再点一下 × 就删掉（服务器上的文件也没了）"); return; }
+      b.disabled = true;
+      var req = later ? post("/bili/watchlater", { id: later.bvid, remove: true }) : post("/remove", { id: f.id });
+      req.then(function (r) {
+        if (r && r.ok) {
+          toast(later ? "移出稍后再看了" : "删掉了"); row.remove();
+          if (later && cur && cur.id === fid && bAct.film === fid) { bAct.later = false; bBigPaint(); }
+        } else { b.disabled = false; toast((r && r.error) || "没成"); }
+      }).catch(function () { b.disabled = false; toast("没成"); });
+    });
+    return row;
+  }
+
+  var plSeq = 0;
+  function plLoad() {
+    var seq = ++plSeq, box = $("plList");
+    plNote("在翻稍后再看…");
+    var wl = get("/bili/watchlater?n=30&offset=0").catch(function () { return { error: "没拉下来" }; });
+    var fl = get("/films").catch(function () { return null; });
+    return Promise.all([wl, fl]).then(function (rs) {
+      if (seq !== plSeq) return;
+      var d = rs[0] || {}, list = d.list || [];
+      var local = (((rs[1] || {}).films) || []).filter(function (f) { return f.kind !== "bili"; });
+      if (rs[1] && rs[1].films) films = rs[1].films;
+      box.innerHTML = "";
+      list.forEach(function (it) { box.appendChild(plRow(null, it)); });
+      if (local.length) {
+        var h = document.createElement("div"); h.className = "pl-sec"; h.textContent = "本地片";
+        box.appendChild(h);
+        local.forEach(function (f) { box.appendChild(plRow(f)); });
+      }
+      var total = d.total || list.length;
+      if ($("plN")) $("plN").textContent = total ? "· " + total + " 条" : "";
+      if (d.error && !list.length) plNote(/登录|logged/i.test(d.error) ? "B 站没登录，看不到稍后再看" : "稍后再看没拉下来");
+      else plNote(list.length ? (d.has_more ? "先列最近加的 " + list.length + " 条，全部的在 bilitube「我的 → 稍后再看」" : "")
+        : "稍后再看是空的——抽屉顶上那颗「稍后再看」点一下就加进来。");
+    });
+  }
+
+  function plOpen(on) {
+    $("pl").hidden = !on;
+    if (on) { dmPanelOpen(false); plLoad(); }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 私人弹幕：AI 发的和这页发弹幕框发的，一条都不发去 B 站，只在这块画面上飘。
+  // 服务端存 60 条的小池子，这边每 2 秒问一次 api/dm/say「有没有新的」，来了就当场飘（走 dmEmit，和 B 站弹幕同一块画布）。
+  // 颜色分人：AI 淡紫、看的人粉色（和批注同一套）。嵌入中「弹幕飘出画面」开着时，交给宿主飘到框外去。
+  // ══════════════════════════════════════════════════════════════
+  // 署名只在这一处改：从看的人这边说——自己的＝「我」、AI 的＝「你」，显示成「我：这句」「你：这句」。
+  var DM_TAG = { companion: "你", user: "我" };
+  // 弹幕前面的署名跟着设置里填的名字走；没填名字时才退回「你」「我」
+  function dmTagged(author, text) {
+    var ai = author === "companion";
+    var nm = ai ? (PAL.name && PAL.name !== "AI" ? PAL.name : "你") : (PAL.user && PAL.user !== "你" ? PAL.user : "我");
+    return nm + "：" + text;
+  }
+  var SAY_COLOR = { companion: "#cfc6e4", user: "#ffb5cf" };
+  var SAY_PILL = { companion: "rgba(207,198,228,.24)", user: "rgba(255,181,207,.24)" };
+  // 居中慢道那条：药丸实到 .55，外加 1px 同色细边
+  var SAY_PILL_HOME = { companion: "rgba(207,198,228,.55)", user: "rgba(255,181,207,.55)" };
+  var SAY_EDGE_HOME = { companion: "rgba(207,198,228,.95)", user: "rgba(255,181,207,.95)" };
+  var OVERLAY_KEY = "bilitube_dm_overlay";
+  var saySince = 0, sayTimer = 0;
+
+  function dmOverlayOn() {
+    try { return localStorage.getItem(OVERLAY_KEY) !== "0"; } catch (e) { return true; }
+  }
+  // 抽屉「弹幕飘出画面」那一格（嵌入时才有）
+  function dmOverlaySet(on) {
+    if (on === dmOverlayOn()) return;
+    try { localStorage.setItem(OVERLAY_KEY, on ? "1" : "0"); } catch (e) {}
+    // 换了就把两边都清干净：画面里正在飘的擦掉，框外的也让宿主清一清
+    dmActive = [];
+    if (EMBED && window.parent !== window) {
+      try { window.parent.postMessage({ type: "bilitube:dm", clear: true, on: on }, location.origin); } catch (e) {}
+    }
+    toast(on ? "弹幕飘出画面" : "弹幕回到画面里");
+  }
+
+  function dmOut(it) {
+    if (window.parent === window) return;
+    var item = { text: dmLabel(it), color: it.color, mode: it.mode || 1,
+                 kind: it.kind || "bili", author: it.author || null,
+                 size: dmS.size, speed: dmS.speed };   // 字号/速度跟着走，宿主按它缩放
+    // 两个人的：lane:"home" ＋ 居中慢道那档的字号/速度（宿主不认 lane 的话，至少也是大一档、慢一截）
+    if (it.kind === "say") {
+      item.lane = "home"; item.size = dmS.size * HOME_SIZE; item.speed = dmS.homeSpeed; item.sec = dmHomeSec();
+    }
+    try { window.parent.postMessage({ type: "bilitube:dm", item: item }, location.origin); } catch (e) {}
+  }
+
+  // AI 的弹幕记录：服务端丢进小池子时带 log:true。插进时间轴（回放到那一秒还会飘）；
+  // 标了当场（live）的、或离现在这一秒 3 秒内的，现在就飘。
+  // AI 的弹幕不让播放器停、不往聊天推——那是看的人发弹幕才有的。
+  function companionItem(n) {
+    return { t: Number(n.t) || 0, mode: 1, kind: "say", author: "companion", color: SAY_COLOR.companion,
+             text: String(n.text || ""), lid: n.id || n.lid || null };
+  }
+  function companionLogAdd(rec) {
+    for (var i = 0; i < companionLog.length; i++) if (companionLog[i].id === rec.lid) return null;
+    var n = { t: Number(rec.t) || 0, author: "companion", text: rec.text, id: rec.lid, kind: "danmaku" };
+    companionLog.push(n);
+    companionLog.sort(function (a, b) { return a.t - b.t; });
+    var it = companionItem(n), k = 0;
+    while (k < dmItems.length && dmItems[k].t <= it.t) k++;
+    dmItems.splice(k, 0, it);
+    if (k < dmCursor) dmCursor++;
+    return it;
+  }
+  function saySpawn(rec) {
+    if (String(rec.film || "").indexOf("live:") === 0) return;   // 直播的条目归直播页飘
+    if (cur && (rec.film === cur.id || rec.author === "user")) bDmSoon();   // 「我们的弹幕」列表跟着长
+    if (rec.log) {
+      if (!cur || rec.film !== cur.id) return;
+      var it = companionLogAdd(rec);
+      var now = $("v").currentTime || 0;
+      if (!rec.live && Math.abs((Number(rec.t) || 0) - now) > 3) return;
+      if (it) it.liveAt = performance.now();
+    }
+    var mode = rec.mode === "top" ? 5 : 1;
+    dmEmit({ mode: mode, kind: "say", author: rec.author,
+             color: rec.color || SAY_COLOR[rec.author] || SAY_COLOR.companion,
+             text: String(rec.text || "") }, $("v").currentTime || 0);
+    dmStart();
+  }
+
+  function sayPoll() {
+    if (!cur) return;
+    get("/dm/say?since=" + saySince).then(function (d) {
+      if (!d) return;
+      cueHandle(d);
+      if (typeof d.last === "number" && d.last > saySince) {
+        (d.list || []).forEach(saySpawn);
+        saySince = d.last;
+      }
+    }).catch(function () {});
+  }
+  function sayStart() {
+    clearInterval(sayTimer);
+    sayTimer = setInterval(sayPoll, 2000);
+    // 进来先对一次表，开片之前的旧弹幕不补飘
+    get("/dm/say?since=0").then(function (d) { if (d && typeof d.last === "number") saySince = d.last; })
+      .catch(function () {});
+  }
+  function sayStop() { clearInterval(sayTimer); sayTimer = 0; }
+
+  // 发弹幕时带的定位和画面：秒数、标题、t±1 秒的 B 站弹幕永远带上，画面解码好了才截一帧。
+  // 后端拿去拼进推给聊天的那条消息（meta.bilitube）。
+  // 这儿的帧比读帧那份小一号（长边 640、质量 .6），因为要塞进 JSON，前面的反代多半有请求体大小限制。
+  var SAY_LONG = 640, SAY_Q = .6;
+  function sayShot() {
+    var v = $("v");
+    if (!cur || !v) return null;
+    var t = Math.max(0, v.currentTime || 0);
+    var out = {
+      bilitube: { film: cur.id || "", bvid: cur.bvid || "", cid: Number(cur.cid) || 0,
+                t: Math.round(t * 10) / 10, title: cur.title || "",
+                paused: !!v.paused, danmaku: grabDanmaku(t), pub: grabPub(t) },
+      frame: null
+    };
+    // 秒数和公开弹幕永远带上（那是定位）；只有画面要等解码好了才截
+    if ($("player").hidden || !v.videoWidth || v.readyState < 2) return out;
+    try {
+      var r = Math.min(1, SAY_LONG / Math.max(v.videoWidth, v.videoHeight));
+      var c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(v.videoWidth * r));
+      c.height = Math.max(1, Math.round(v.videoHeight * r));
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+      out.frame = c.toDataURL("image/jpeg", SAY_Q).split(",")[1] || null;
+    } catch (e) { out.frame = null; }      // taint 了就只发字，不炸
+    return out;
+  }
+
+  // 点播发弹幕：先暂停（停在这一秒等 AI 看），再把秒数、±3 秒内过了筛子的公开弹幕交给后端，
+  // 由它配上字幕拼成【bilitube·弹幕】推给聊天。发出去以后保持暂停，什么时候接着放由看的人自己按；
+  // 只有没发出去时才自动接着放（本来在放的话）。
+  function grabPub(t) {
+    // 用 dmItems：已经过了面板里的类型/彩色/关键词筛子、合并成 ×N 的那份，批注不算
+    var out = [];
+    (dmItems || []).forEach(function (d) {
+      if (d.kind !== "bili") return;
+      var dt = Number(d.t) || 0;
+      if (Math.abs(dt - t) > 3) return;
+      out.push({ t: Math.round(dt * 10) / 10, text: String(d.text || "").slice(0, 60), n: d.n || 1 });
+    });
+    out.sort(function (a, b) { return Math.abs(a.t - t) - Math.abs(b.t - t) || b.n - a.n; });
+    return out.slice(0, 8);
+  }
+
+  // 一点进输入框就先停住，弹幕就落在想说话的那一秒；什么都没写就点走，自动接着放。
+  var sayHeld = false;
+  $("sayText").addEventListener("focus", function () {
+    var v = $("v");
+    if (v && !v.paused && !v.ended) { sayHeld = true; try { v.pause(); } catch (err) {} }
+  });
+  $("sayText").addEventListener("blur", function () {
+    setTimeout(function () {
+      if (sayHeld && !$("sayText").value.trim() && !$("sayBtn").disabled) {
+        sayHeld = false; try { $("v").play(); } catch (err) {}
+      }
+    }, 200);
+  });
+
+  $("sayBar").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var t = $("sayText").value.trim();
+    if (!t) return;
+    if (!cur) { toast("先开一部片"); return; }
+    $("sayBtn").disabled = true;
+    var v = $("v"), wasPlaying = sayHeld || !!(v && !v.paused && !v.ended);
+    sayHeld = false;
+    if (wasPlaying) { try { v.pause(); } catch (err) {} }
+    var shot = sayShot() || {};
+    post("/dm/say", { text: t, author: "user", frame: shot.frame || null,
+                      bilitube: shot.bilitube || null }).then(function (r) {
+      $("sayBtn").disabled = false;
+      if (r && r.ok) { $("sayText").value = ""; $("sayText").blur(); sayPoll(); bDmSoon(); }
+      else {
+        toast((r && r.error) || "没发出去");
+        if (wasPlaying) { try { v.play(); } catch (err) {} }
+      }
+    }).catch(function () {
+      $("sayBtn").disabled = false; toast("没发出去");
+      if (wasPlaying) { try { v.play(); } catch (err) {} }
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // 读帧（嵌入时）：宿主页面里发消息时 postMessage 来一句 bilitube:grab，
+  // 这边回 bilitube:frame：一张当前画面（canvas 抓，长边 800、jpeg 0.7）＋ 前后一秒的弹幕（合并成 ×N，
+  // 按条数排，封顶 20 条 / 400 字）。只应答不主动推；没片、没解码好、canvas 被污染一律老实回 ok:false，
+  // 绝不把页面弄炸。抽屉里「发消息时带画面」关着就直接回绝，宿主那头不用知道开关在哪。
+  // ══════════════════════════════════════════════════════════════
+  var GRAB_LONG = 800, GRAB_Q = .7, GRAB_WIN = 1, GRAB_N = 20, GRAB_CHARS = 400;
+  // 这颗开关默认关：平常聊天不该冷不丁带上截图，想带的人自己打开。
+  // （键名带 _v2：早先那把默认开的 bilitube_send_frame 不再认。）发弹幕带的画面不看这颗开关，见 sayShot。
+  var SW_KEY = "bilitube_send_frame_v2";
+
+  function swOn() {
+    try { return localStorage.getItem(SW_KEY) === "1"; } catch (e) { return false; }
+  }
+  function swFrameSet(on) {
+    if (on === swOn()) return;
+    try { localStorage.setItem(SW_KEY, on ? "1" : "0"); } catch (e) {}
+    toast(on ? "发消息会带上画面" : "只发文字了");
+  }
+
+  function grabDanmaku(t) {
+    var lo = t - GRAB_WIN, hi = t + GRAB_WIN, seen = {}, order = [];
+    (dmRawList || []).forEach(function (d) {
+      var dt = Number(d.t) || 0;
+      if (dt < lo || dt > hi) return;
+      var txt = String(d.text || "").trim();
+      if (!txt) return;
+      var key = "k" + txt;
+      if (seen[key]) { seen[key].n++; return; }
+      seen[key] = { text: txt, n: 1 };
+      order.push(seen[key]);
+    });
+    order.sort(function (a, b) { return b.n - a.n; });
+    var out = [], chars = 0;
+    for (var i = 0; i < order.length && out.length < GRAB_N; i++) {
+      var line = order[i].text + (order[i].n > 1 ? " ×" + order[i].n : "");
+      if (chars + line.length > GRAB_CHARS) break;
+      chars += line.length;
+      out.push(line);
+    }
+    return out;
+  }
+
+  function grabReply(rid, extra) {
+    var m = { type: "bilitube:frame", rid: rid || null, ok: false };
+    if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) m[k] = extra[k];
+    try { (window.parent || window).postMessage(m, location.origin); } catch (e) {}
+  }
+
+  function grabNow(rid) {
+    if (!swOn()) return grabReply(rid, { reason: "带画面关着" });
+    // 直播开着：用直播发弹幕那套（lshotCompose，眼前这一刻＋前一两秒竖拼）当这一帧；没时间码
+    if (live && !$("live").hidden) {
+      var L = live, li = L.info || {}, h = null;
+      try { h = lshotCompose(); } catch (e) { h = null; }
+      var linfo = { id: "live:" + L.room, bvid: null, cid: null, live: true,
+                    title: ["直播", li.uname, li.title].filter(Boolean).join(" · "), t: null, paused: false, danmaku: [] };
+      if (!h) return grabReply(rid, { reason: lshotBad ? "画面读不出来" : "直播还没出画面", info: linfo });
+      try {
+        h.c.toBlob(function (b) {
+          if (!b) return grabReply(rid, { reason: "编不出图", info: linfo });
+          grabReply(rid, { ok: true, blob: b, w: h.c.width, h: h.c.height, info: linfo });
+        }, "image/jpeg", GRAB_Q);
+      } catch (e) { grabReply(rid, { reason: "画面读不出来", info: linfo }); }
+      return;
+    }
+    var v = $("v");
+    if (!cur || $("player").hidden || !v || !v.videoWidth || v.readyState < 2) {
+      return grabReply(rid, { reason: "没在放片" });
+    }
+    var t = Math.max(0, v.currentTime || 0);
+    var info = {
+      id: cur.id || null, bvid: cur.bvid || null, cid: cur.cid || null,
+      title: cur.title || "", t: t, paused: !!v.paused, danmaku: grabDanmaku(t)
+    };
+    var w = v.videoWidth, h = v.videoHeight, r = Math.min(1, GRAB_LONG / Math.max(w, h));
+    var c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * r));
+    c.height = Math.max(1, Math.round(h * r));
+    try {
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+      if (c.toBlob) {
+        c.toBlob(function (b) {
+          if (!b) return grabReply(rid, { reason: "编不出图", info: info });
+          grabReply(rid, { ok: true, blob: b, w: c.width, h: c.height, info: info });
+        }, "image/jpeg", GRAB_Q);
+        return;
+      }
+      grabReply(rid, { ok: true, dataUrl: c.toDataURL("image/jpeg", GRAB_Q), w: c.width, h: c.height, info: info });
+    } catch (e) {
+      grabReply(rid, { reason: "画面读不出来（跨域？）", info: info });   // taint 了就别硬来
+    }
+  }
+
+  window.addEventListener("message", function (ev) {
+    if (ev.origin !== location.origin) return;
+    var d = ev.data;
+    if (!d) return;
+    if (d.type === "bilitube:grab") {
+      try { grabNow(d.rid); } catch (e) { grabReply(d.rid, { reason: "抓不到" }); }
+      return;
+    }
+    // 宿主窗口头上的几颗钮（嵌入时这页不画顶栏）：
+    // back＝回 browse/ 找片；more＝拉起抽屉（稍后再看、弹幕设置都在里面，两段都折着）；
+    // shelf / dmpanel＝拉起抽屉并展开「稍后再看」/「弹幕设置」那一段（旧宿主还在发，照旧认）；抽屉开着时再按一下就收起
+    if (d.type === "bilitube:cmd") {
+      if (d.cmd === "back") { bBack(); return; }
+      if (!$("bMask").hidden) { bSheetClose(); return; }
+      bSheetOpen();
+      if (d.cmd === "shelf" && !bLiveOn() && $("pl").hidden) { plOpen(true); bFoldSync(); }
+      else if (d.cmd === "dmpanel" && !$("bRowDm").hidden && $("dmPanel").hidden) { plOpen(false); dmPanelOpen(true); bFoldSync(); }
+      return;
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // 界面：顶栏、排布、抽屉、称呼。播放、弹幕、直播、插播的逻辑都在上面，这里只管摆和开合：
+  //   ① 排布：视频 → 标题＋一行小字 → 续播一行 → 发弹幕 → 我们的弹幕（时间钮＋那句话）→ 简介 → 评论区。
+  //   ② 抽屉：顶栏右边那颗圆钮拉起来，收藏/点赞/稍后再看（钮）、稍后再看（列表）、弹幕设置、公开弹幕、倍速、线路、选集、清晰度、日夜；
+  //      嵌入时多两格：发消息时带画面、弹幕飘出画面。按住把手往下拖能关。
+  //   ③ 称呼：PAL（见最上面），browse/config.js 的 companion.name 当默认，api/prefs 里改过名字就用改过的。
+  // 图标：Lucide（ISC License, Copyright (c) Lucide Contributors 2022），线宽 1.8。
+  // ══════════════════════════════════════════════════════════════
+  var BI_P = {
+    back: '<path d="M15 18l-6-6 6-6"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    heart: BP_ICON.heart, like: BP_ICON.like,
+    later: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    list: '<path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/>',
+    sliders: '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+    dm: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/>',
+    rate: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+    monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+    wind: '<path d="M12.8 19.6A2 2 0 1 0 14 16H2"/><path d="M17.5 8a2.5 2.5 0 1 1 2 4H2"/><path d="M9.8 4.4A2 2 0 1 1 11 8H2"/>',
+    chev: '<path d="m9 18 6-6-6-6"/>'
+  };
+  function bIc(name, fill) {
+    return '<svg viewBox="0 0 24 24" fill="' + (fill ? "currentColor" : "none") + '" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + BI_P[name] + "</svg>";
+  }
+  function bReduce() { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; } }
+  // 进场：逐行错开 --stagger，第 14 行以后一起进（样式 .b-in）
+  function bIn(el, i) { el.classList.remove("b-in"); void el.offsetWidth; el.style.setProperty("--i", i || 0); el.classList.add("b-in"); }
+  var bAct = { film: "", fav: false, like: false, later: false };
+  var bRate = 1;
+
+  function bInit() {
+    var wrap = document.querySelector(".wrap"), player = $("player");
+    // 顶栏：左返回、右设置（和 browse/ 的顶栏一样两颗圆钮）
+    var top = document.createElement("div");
+    top.className = "b-top";
+    top.innerHTML = '<button class="b-top-btn" id="bBack" type="button" aria-label="返回" title="返回">' + bIc("back") + "</button>" +
+      '<button class="b-top-btn" id="bMore" type="button" aria-label="设置" title="设置" aria-haspopup="dialog" aria-expanded="false">' + bIc("gear") + "</button>";
+    wrap.insertBefore(top, wrap.firstChild);
+    // 排布：视频挪到标题上面；标题下一行小字、续播一行；发弹幕那一行后面接「我们的弹幕」「简介」，评论区垫底
+    var stage = player.querySelector(".stage"), title = $("title");
+    player.insertBefore(stage, title);
+    var meta = document.createElement("div"); meta.className = "b-meta"; meta.id = "bMeta";
+    title.parentNode.insertBefore(meta, title.nextSibling);
+    meta.parentNode.insertBefore($("resumeAsk"), meta.nextSibling);
+    var dm = document.createElement("section"); dm.className = "b-blk"; dm.id = "bDm"; dm.hidden = true;
+    dm.innerHTML = '<div class="b-hd">我们的弹幕</div><div class="b-lines" id="bDmLines"></div>' +
+      '<button type="button" class="b-more b-dm-fold" id="bDmFold" hidden></button>';
+    var desc = document.createElement("section"); desc.className = "b-blk"; desc.id = "bDesc"; desc.hidden = true;
+    desc.innerHTML = '<div class="b-hd">简介</div><div class="b-desc-tx" id="bDescTx"></div>';
+    player.insertBefore(dm, $("cmt")); player.insertBefore(desc, $("cmt"));
+    $("bDmFold").addEventListener("click", bDmToggle);
+    // 小窗里：头上那行片名由宿主写；标题、那行小字、简介、评论区并成 #bDesc 一个折叠块（默认折着，点那一行开合），
+    // 「我们的弹幕」排在它上面。节点原样搬，监听器跟着走；#bDesc 自己还是 #player 的直接孩子（bOpen 照它排弹幕块）。样式只在小窗里生效。
+    if (EMBED) {
+      desc.insertBefore(title, $("bDescTx")); desc.insertBefore(meta, $("bDescTx"));
+      desc.appendChild($("cmt"));
+      bFoldLabel(0);
+    }
+    desc.querySelector(".b-hd").addEventListener("click", function () { desc.classList.toggle("open"); });
+    var empty = document.createElement("div"); empty.className = "b-empty"; empty.id = "bEmpty"; empty.hidden = true;
+    empty.innerHTML = '<p></p><button type="button">返回</button>';
+    wrap.appendChild(empty);
+    empty.querySelector("button").addEventListener("click", bBack);
+    // 抽屉
+    var mask = document.createElement("div");
+    mask.className = "b-mask"; mask.id = "bMask"; mask.hidden = true;
+    mask.setAttribute("role", "dialog"); mask.setAttribute("aria-modal", "true"); mask.setAttribute("aria-label", "设置");
+    var seg = function (key, pairs) {
+      return '<div class="b-seg" data-seg="' + key + '">' + pairs.map(function (p) { return '<button type="button" data-v="' + p[0] + '">' + p[1] + "</button>"; }).join("") + "</div>";
+    };
+    mask.innerHTML = '<div class="b-sheet" id="bSheet">' +
+      '<div class="b-grip"></div>' +
+      '<div class="b-head"><span class="b-cover" id="bCover"></span><div class="b-info"><div class="b-name" id="bName"></div><div class="b-artist" id="bArtist"></div></div></div>' +
+      '<div class="b-big" id="bBig">' +
+        '<button class="b-bigbtn" type="button" data-act="fav">' + bIc("heart") + "<span>收藏</span></button>" +
+        '<button class="b-bigbtn" type="button" data-act="like">' + bIc("like") + "<span>点赞</span></button>" +
+        '<button class="b-bigbtn" type="button" data-act="later">' + bIc("later") + "<span>稍后再看</span></button>" +
+      "</div>" +
+      '<div class="b-sep" id="bSep1"></div>' +
+      '<button class="b-row" type="button" id="bRowPl" aria-expanded="false">' + bIc("list") + '<span>稍后再看</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + BI_P.chev + "</svg></button>" +
+      '<button class="b-row" type="button" id="bRowDm" aria-expanded="false">' + bIc("sliders") + '<span>弹幕设置</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + BI_P.chev + "</svg></button>" +
+      '<div class="b-sep" id="bSep2"></div>' +
+      '<div class="b-row b-opt" id="bOptDm">' + bIc("dm") + "<span>公开弹幕</span>" + seg("dm", [["0", "关"], ["1", "开"]]) + "</div>" +
+      '<div class="b-row b-opt" id="bOptRate">' + bIc("rate") + "<span>倍速</span>" + seg("rate", [["0.75", "0.75"], ["1", "1"], ["1.25", "1.25"], ["1.5", "1.5"], ["2", "2"]]) + "</div>" +
+      '<div class="b-row b-opt" id="bOptRoute">' + bIc("route") + "<span>线路</span>" + seg("route", [["direct", "直连"], ["proxy", "代理"]]) + "</div>" +
+      '<div class="b-row b-opt" id="bOptPart">' + bIc("layers") + "<span>选集</span></div>" +
+      '<div class="b-row b-opt" id="bOptQn">' + bIc("monitor") + "<span>清晰度</span></div>" +
+      '<div class="b-row b-opt" id="bOptLiveRoute">' + bIc("route") + '<span>线路</span><span class="v" id="bLiveRoute"></span></div>' +
+      '<div class="b-row b-opt" id="bOptTheme">' + bIc("moon") + "<span>日夜</span>" + seg("theme", [["light", "白天"], ["dark", "夜里"]]) + "</div>" +
+      // 嵌入时才有的两格
+      (EMBED ? '<div class="b-sep"></div>' +
+        '<div class="b-row b-opt" id="bOptFrame">' + bIc("image") + "<span>发消息时带画面</span>" + seg("frame", [["0", "关"], ["1", "开"]]) + "</div>" +
+        '<div class="b-row b-opt" id="bOptOverlay">' + bIc("wind") + "<span>弹幕飘出画面</span>" + seg("overlay", [["0", "关"], ["1", "开"]]) + "</div>" : "") +
+      "</div>";
+    document.body.appendChild(mask);
+    // 页面里的几样搬进抽屉（节点原样搬，监听器跟着走）：稍后再看、弹幕设置、选集下拉、直播清晰度下拉
+    var rowPl = $("bRowPl"), rowDm = $("bRowDm");
+    rowPl.parentNode.insertBefore($("pl"), rowPl.nextSibling);
+    rowDm.parentNode.insertBefore($("dmPanel"), rowDm.nextSibling);
+    $("bOptPart").appendChild($("partSel"));
+    $("bOptQn").appendChild($("liveQn"));
+    var pq = document.createElement("select"); pq.id = "pgcQn"; pq.hidden = true; pq.setAttribute("aria-label", "清晰度");
+    $("bOptQn").appendChild(pq);
+    pq.addEventListener("change", function () {
+      if (!cur || !cur.pgc) return;
+      pgcQnPick = Number(pq.value) || 0;
+      var v = $("v");
+      routeStart(cur, { t: v.currentTime || 0, play: !v.paused });
+    });
+    rowPl.addEventListener("click", function () {
+      var on = $("pl").hidden; plOpen(on); bFoldSync();
+      if (on) bIn($("pl"), 0);
+    });
+    rowDm.addEventListener("click", function () {
+      var on = $("dmPanel").hidden; if (on) plOpen(false); dmPanelOpen(on); bFoldSync();
+      if (on) bIn($("dmPanel"), 0);
+    });
+    var sheet = $("bSheet");
+    sheet.addEventListener("click", function (e) { e.stopPropagation(); });   // 抽屉里的点击别冒到 document（那里「点外面就收弹幕设置」）
+    mask.addEventListener("click", function (e) { if (e.target === mask) bSheetClose(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !mask.hidden) bSheetClose(); });
+    // 抽屉按着往下拉跟手，松手过了一截（或甩得快）就滑走，不然弹回去（起点只认把手＋头＋三大钮，免得和里面的滚动打架）
+    var dragY0 = -1, dragT0 = 0, dragLast = 0, dragging = false;
+    var dragStart = function (e) {
+      if (!e.target.closest(".b-grip, .b-head, .b-big")) return;
+      dragY0 = e.touches ? e.touches[0].clientY : e.clientY; dragT0 = performance.now(); dragLast = 0; dragging = true;
+      sheet.style.transition = "none";
+    };
+    var dragMove = function (e) {
+      if (!dragging) return;
+      var y = (e.touches ? e.touches[0].clientY : e.clientY) - dragY0;
+      dragLast = Math.max(0, y);
+      sheet.style.transform = "translateY(" + dragLast + "px)";
+      if (e.cancelable) e.preventDefault();
+    };
+    var dragEnd = function () {
+      if (!dragging) return; dragging = false;
+      sheet.style.transition = "";
+      var v = dragLast / Math.max(1, performance.now() - dragT0);
+      if (dragLast > sheet.offsetHeight * 0.32 || v > 0.6) { sheet.style.transform = "translateY(100%)"; bSheetClose(); }
+      else sheet.style.transform = "";
+    };
+    sheet.addEventListener("touchstart", dragStart, { passive: true });
+    sheet.addEventListener("touchmove", dragMove, { passive: false });
+    sheet.addEventListener("touchend", dragEnd); sheet.addEventListener("touchcancel", dragEnd);
+    sheet.addEventListener("mousedown", dragStart);
+    window.addEventListener("mousemove", dragMove); window.addEventListener("mouseup", dragEnd);
+    // 三大钮：收藏 / 点赞 / 稍后再看（api/bili/fav、like、watchlater）
+    $("bBig").addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-act]"); if (!b || b.disabled || !cur || !cur.bvid) return;
+      var k = b.dataset.act, was = !!bAct[k], film = cur.id;
+      b.disabled = true;
+      var path = k === "fav" ? "/bili/fav" : k === "like" ? "/bili/like" : "/bili/watchlater";
+      var body = k === "like" ? { id: cur.bvid, on: !was } : { id: cur.bvid, remove: was };
+      post(path, body).then(function (r) {
+        b.disabled = false;
+        if (!(r && r.ok)) { toast((r && r.error) || "没成功"); return; }
+        if (bAct.film === film) bAct[k] = !was;
+        bBigPaint();
+        if (k === "later" && !$("pl").hidden) plLoad();      // 稍后再看那一层开着就跟着刷
+        toast(k === "fav" ? (was ? "取消收藏了" : "收藏了") : k === "like" ? (was ? "取消赞了" : "赞了") : (was ? "移出稍后再看了" : "放进稍后再看了"));
+      }).catch(function () { b.disabled = false; toast("没成功"); });
+    });
+    // 一排排分段开关
+    mask.querySelectorAll(".b-seg").forEach(function (el) {
+      el.addEventListener("click", function (e) {
+        var b = e.target.closest("button[data-v]"); if (!b) return;
+        var k = el.dataset.seg, v = b.dataset.v;
+        if (k === "dm") dmSetOn(v === "1");
+        else if (k === "rate") { bRate = Number(v) || 1; var vv = $("v"); vv.defaultPlaybackRate = bRate; vv.playbackRate = bRate; }
+        else if (k === "route") bRouteSet(v);
+        else if (k === "theme") bTheme(v);
+        else if (k === "frame") swFrameSet(v === "1");
+        else if (k === "overlay") dmOverlaySet(v === "1");
+        bSegPaint();
+      });
+    });
+    $("bBack").addEventListener("click", bBack);
+    $("bMore").addEventListener("click", function (e) { e.stopPropagation(); bSheetOpen(); });
+    window.addEventListener("storage", function (e) {
+      if (e.key === "bilitube_theme" && (e.newValue === "dark" || e.newValue === "light")) bTheme(e.newValue, true);
+    });
+    bTheme(document.documentElement.dataset.uiTheme, true);
+    bNames();
+    setTimeout(function () { if (!cur && !live) bEmptyShow("这部片子没打开"); }, 12000);
+  }
+
+  function bTheme(t, quiet) {
+    t = t === "dark" ? "dark" : "light";
+    document.documentElement.dataset.uiTheme = t;
+    if (!quiet) { try { localStorage.setItem("bilitube_theme", t); } catch (e) {} }     // 和 browse/ 同一把钥匙
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (!m) { m = document.createElement("meta"); m.name = "theme-color"; document.head.appendChild(m); }
+    m.content = t === "dark" ? "#000000" : "#f4f4f4";
+  }
+  function bBack() {
+    if (EMBED) {                                    // 嵌入：换回 browse/ 刚才那一页（它跳过来之前把页名记在会话里）；用 replace，返回键不在 iframe 里一格格倒
+      var h = "";
+      try { h = sessionStorage.getItem("bilitube_embed_back") || ""; } catch (e) {}
+      location.replace("browse/?embed=1" + (/^[\w\/-]{1,60}$/.test(h) ? "#" + h : ""));
+      return;
+    }
+    var ref = "", fromBrowse = false;
+    try { ref = sessionStorage.getItem("bilitube_ui_back") || ""; } catch (e) {}
+    try { var r = new URL(document.referrer); fromBrowse = r.origin === location.origin && r.pathname.indexOf(location.pathname.replace(/[^\/]*$/, "") + "browse/") === 0; } catch (e) {}
+    if (fromBrowse && history.length > 1) {
+      history.back();                               // 回到 browse/ 刚才那一页（它自己记着翻到哪儿）
+      setTimeout(function () { location.href = ref || "browse/"; }, 700);   // 没退出去（比如前一格还是这页）就直接去
+      return;
+    }
+    location.href = ref || "browse/";
+  }
+  function bEmptyShow(t) {
+    if (cur || (live && !$("live").hidden)) return;
+    var el = $("bEmpty"); if (!el) return;
+    el.querySelector("p").textContent = t;
+    el.hidden = false;
+  }
+  function bNames() {
+    var paint = function () {
+      document.querySelectorAll("#bDmLines .who").forEach(function (w) { w.textContent = palName(); });
+      if ($("badge").dataset.on === "1") $("badge").textContent = palName() + "在看这一幕";
+    };
+    // 默认：browse/config.js（部署时改名字就改那一个文件）；拿不到就是 PAL 的中性默认
+    var s = document.createElement("script");
+    s.src = "browse/config.js";
+    s.onload = function () {
+      try { var c = window.BILITUBE_CONFIG && window.BILITUBE_CONFIG.companion; if (c && c.name && !PAL.fromPrefs) { PAL.name = String(c.name); paint(); } } catch (e) {}
+    };
+    document.head.appendChild(s);
+    // 设置里改过的名字；没有这个接口、没改过（null）都不吭声
+    fetch(API + "/prefs", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d) return;
+      var n = d.companionName || (d.companion && d.companion.name);
+      if (n) { PAL.name = String(n); PAL.fromPrefs = true; }
+      if (d.userName) PAL.user = String(d.userName);
+      paint();
+    }).catch(function () {});
+  }
+
+  // ── 抽屉开合：去掉 hidden → 下一帧加 .show（滑上来）；收＝摘 .show，等过渡走完 260ms 再 hidden ──
+  function bSheetOpen() {
+    var mask = $("bMask"), sheet = $("bSheet");
+    bSync();
+    sheet.style.transform = "";
+    mask.hidden = false;
+    void sheet.offsetHeight;                       // 先落一帧「在底下」的样子，过渡才有起点
+    requestAnimationFrame(function () { mask.classList.add("show"); });
+    $("bMore").setAttribute("aria-expanded", "true");
+  }
+  function bSheetClose() {
+    var mask = $("bMask"), sheet = $("bSheet");
+    if (!mask || mask.hidden) return;
+    mask.classList.remove("show"); sheet.style.transform = "";
+    $("bMore").setAttribute("aria-expanded", "false");
+    setTimeout(function () {
+      if (mask.classList.contains("show")) return;
+      mask.hidden = true;
+      plOpen(false); dmPanelOpen(false); bFoldSync();
+    }, 260);
+  }
+  function bFoldSync() {
+    $("bRowPl").setAttribute("aria-expanded", $("pl").hidden ? "false" : "true");
+    $("bRowDm").setAttribute("aria-expanded", $("dmPanel").hidden ? "false" : "true");
+  }
+  function bLiveOn() { return !!live && !$("live").hidden; }
+  // 每次拉开都对一遍：这会儿是点播还是直播、B 站片还是本地片，露哪几排
+  function bSync() {
+    var isLive = bLiveOn(), f = cur, isBili = !isLive && !!(f && f.kind === "bili" && f.bvid);
+    var isPgc = isBili && !!f.pgc;
+    var show = function (id, on) { $(id).hidden = !on; };
+    var info = isLive ? (live.info || {}) : null;
+    $("bName").textContent = isLive ? (info.title || "直播间 " + live.room) : (f ? f.title : "");
+    $("bArtist").textContent = isLive ? [info.uname, "直播"].filter(Boolean).join(" · ") : (f ? (f.up || (f.kind === "bili" ? "" : "本地片源")) : "");
+    var cv = $("bCover");
+    cv.style.backgroundImage = isLive ? $("liveFace").style.backgroundImage : (f && f.poster ? "url('" + f.poster + "')" : "");
+    cv.classList.toggle("round", isLive);
+    show("bBig", isBili && !isPgc); show("bSep1", isBili && !isPgc);
+    show("bRowPl", !isLive); show("bRowDm", isLive || !!(f && f.playable));   // 直播也有公开弹幕：开关和弹幕设置照样管
+    show("bOptDm", isLive || !!(f && f.playable)); show("bOptRate", !isLive && !!(f && f.playable));
+    show("bOptRoute", isBili);
+    show("bOptPart", !isLive && !$("parts").hidden);
+    show("bOptQn", (isLive && !$("liveQn").hidden) || (isPgc && !$("pgcQn").hidden));
+    $("liveQn").style.display = isLive ? "" : "none"; $("pgcQn").style.display = isPgc ? "" : "none";
+    var lr = isLive ? liveRouteText() : "";
+    $("bLiveRoute").textContent = lr; show("bOptLiveRoute", !!lr);
+    show("bSep2", true);
+    if (isLive) plOpen(false);
+    bBigPaint(); bSegPaint(); bFoldSync();
+  }
+  function bBigPaint() {
+    var L = { fav: ["收藏", "已收藏"], like: ["点赞", "已赞"], later: ["稍后再看", "已在稍后再看"] };
+    $("bBig").querySelectorAll("button[data-act]").forEach(function (b) {
+      var k = b.dataset.act, on = !!bAct[k];
+      b.classList.toggle("on", on);
+      b.innerHTML = bIc(k === "fav" ? "heart" : k, on && k !== "later") + "<span>" + L[k][on ? 1 : 0] + "</span>";
+    });
+  }
+  function bSegPaint() {
+    var val = {
+      dm: dmS.on ? "1" : "0",
+      rate: String(bRate),
+      route: route && route.mode === "proxy" ? "proxy" : route && route.mode === "direct" ? "direct" : (directOff() ? "proxy" : "direct"),
+      theme: document.documentElement.dataset.uiTheme === "dark" ? "dark" : "light",
+      frame: swOn() ? "1" : "0",
+      overlay: dmOverlayOn() ? "1" : "0"
+    };
+    $("bMask").querySelectorAll(".b-seg").forEach(function (el) {
+      var v = val[el.dataset.seg];
+      el.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.v === v); });
+    });
+  }
+  // 线路：localStorage bilitube_direct="0"＝不走直连；换了当场接着这一秒重连
+  function bRouteSet(mode) {
+    if (!cur || cur.kind !== "bili") return;
+    try { if (mode === "proxy") localStorage.setItem("bilitube_direct", "0"); else localStorage.removeItem("bilitube_direct"); } catch (e) {}
+    var v = $("v");
+    routeStart(cur, { t: v.currentTime || 0, play: !v.paused });
+    toast(mode === "proxy" ? "改走代理了" : "改回直连了");
+  }
+
+  // ── 换片 / 开直播 ──
+  function bOpen(f) {
+    $("bEmpty").hidden = true;
+    bAct = { film: f.id, fav: false, like: false, later: false };
+    var v = $("v"); v.defaultPlaybackRate = bRate;
+    var dm = $("bDm"); $("player").insertBefore(dm, $("bDesc"));
+    bDmFor = ""; bDmLoad();
+    afterStart(f, function () { bInfo(f); });
+    bSheetClose();
+  }
+  function bLive(info) {
+    $("bEmpty").hidden = true;
+    var dm = $("bDm"), bar = $("liveSayBar");
+    bar.parentNode.insertBefore(dm, bar.nextSibling);
+    bDmFor = ""; bDmLoad();
+    bSheetClose();
+  }
+  // 标题下那一行：UP · 播放量 · 日期（播放量和日期问 api/bili/info，拿不到就只有 UP）；简介默认整段摊开
+  var bInfoSeq = 0;
+  function bInfo(f) {
+    var seq = ++bInfoSeq, meta = $("bMeta"), desc = $("bDesc");
+    var line = function (up, view, day) { meta.textContent = [up, view ? bpPlays(view) + "播放" : "", day].filter(Boolean).join(" · "); };
+    desc.hidden = !EMBED; $("bDescTx").textContent = "";     // 小窗里这块装着标题，一直在
+    if (f.kind !== "bili" || !f.bvid) { meta.textContent = [f.duration ? fmt(f.duration) : "", f.hasSub ? "有字幕" : ""].filter(Boolean).join(" · "); return; }
+    line(f.up, 0, "");
+    get("/bili/info?id=" + encodeURIComponent(f.id)).then(function (d) {
+      if (seq !== bInfoSeq || !d || !d.ok) return;
+      line(d.up || f.up, d.view, bpDay(d.pubdate));
+      if (bAct.film === f.id && !f.pgc) {
+        if (typeof d.liked === "boolean") bAct.like = d.liked;
+        if (typeof d.favoured === "boolean") bAct.fav = d.favoured;
+        if (typeof d.later === "boolean") bAct.later = d.later;
+        bBigPaint();
+      }
+      var t = String(d.desc || "").trim();
+      if (t && t !== "-") {
+        $("bDescTx").textContent = t + (d.descCut ? "…" : "");
+        desc.hidden = false; bIn(desc, 0);
+      }
+    }).catch(function () {});
+  }
+
+  // ── 我们的弹幕：两个人发过的，时间钮＋那句话（和 browse/「一起聊过的片」同一种样子；数据 api/dm/log?film=） ──
+  // 点播按秒排，点时间钮跳过去；直播没有时间轴，按发送先后排、显示几点几分。新来的那几条逐行进场。
+  var bDmFor = "", bDmSeen = null, bDmSeq = 0, bDmTimer = 0;
+  // 聊得多的片子这张单子会很长，把简介、评论区顶远：默认只露最近发的 BDM_FOLD 条（按发送先后挑，排法不变），
+  // 底下一行「展开全部 N 条」，再点收起；新飘进来的那条总在露出的几条里。每次换片 / 进来都从折叠开始。
+  var BDM_FOLD = 3, bDmOpen = false, bDmLast = null;
+  function bDmFilm() { return bLiveOn() ? "live:" + live.room : (cur ? cur.id : ""); }
+  function bDmSoon() { clearTimeout(bDmTimer); bDmTimer = setTimeout(bDmLoad, 600); }
+  function bDmLoad() {
+    var film = bDmFilm(), seq = ++bDmSeq;
+    if (!film) { $("bDm").hidden = true; return; }
+    var isLive = film.indexOf("live:") === 0;
+    get("/dm/log?film=" + encodeURIComponent(film) + (isLive ? "" : "&notes=1")).then(function (d) {
+      if (seq !== bDmSeq || film !== bDmFilm()) return;
+      if (film !== bDmFor) { bDmFor = film; bDmSeen = null; bDmOpen = false; }
+      bDmDraw((d && d.items) || [], isLive);
+    }).catch(function () {});
+  }
+  function bClock(at) {
+    var d = new Date(String(at || "").replace(/Z?$/, "Z"));
+    if (isNaN(d)) return "";
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  function bDmDraw(items, isLive) {
+    var box = $("bDmLines"), blk = $("bDm");
+    items = items.filter(function (x) { return x && String(x.text || "").trim(); });
+    items.sort(isLive
+      ? function (a, b) { return (a.at || "") < (b.at || "") ? -1 : (a.at || "") > (b.at || "") ? 1 : 0; }
+      : function (a, b) { return (a.t || 0) - (b.t || 0) || ((a.at || "") < (b.at || "") ? -1 : 1); });
+    if (isLive && items.length > 40) items = items.slice(-40);
+    blk.hidden = !items.length;
+    bDmLast = { items: items, isLive: isLive };
+    var keyOf = function (it) { return it.id || ((it.at || "") + "|" + it.text); };
+    var folded = !bDmOpen && items.length > BDM_FOLD, keep = {};
+    if (folded) items.slice().sort(function (a, b) { return (a.at || "") < (b.at || "") ? 1 : (a.at || "") > (b.at || "") ? -1 : 0; })
+      .slice(0, BDM_FOLD).forEach(function (it) { keep[keyOf(it)] = 1; });
+    var fb = $("bDmFold");
+    fb.hidden = items.length <= BDM_FOLD;
+    fb.textContent = bDmOpen ? "收起" : "展开全部 " + items.length + " 条";
+    fb.setAttribute("aria-expanded", bDmOpen ? "true" : "false");
+    var first = bDmSeen === null, seen = bDmSeen || {}, next = {}, k = 0, prevT = null;
+    box.innerHTML = "";
+    items.forEach(function (it) {
+      var key = keyOf(it);
+      if (folded && !keep[key]) return;
+      next[key] = 1;
+      var ai = it.author === "companion";
+      var row = document.createElement("div");
+      row.className = "b-ln " + (ai ? "ai" : "me");
+      var ts;
+      if (isLive) {
+        ts = document.createElement("span"); ts.className = "b-ts clock"; ts.textContent = bClock(it.at);
+      } else {
+        var t = Number(it.t) || 0;
+        ts = document.createElement("button"); ts.type = "button"; ts.className = "b-ts";
+        if (prevT !== null && Math.abs(t - prevT) < 1) ts.classList.add("same");
+        prevT = t;
+        ts.textContent = fmt(t);
+        ts.setAttribute("aria-label", "跳到 " + fmt(t));
+        ts.addEventListener("click", function () { bJump(t); });
+      }
+      var tx = document.createElement("span"); tx.className = "tx";
+      if (ai) { var w = document.createElement("span"); w.className = "who"; w.textContent = palName(); tx.appendChild(w); }
+      tx.appendChild(document.createTextNode(String(it.text)));
+      row.appendChild(ts); row.appendChild(tx);
+      box.appendChild(row);
+      if (first || !seen[key]) bIn(row, k++);
+    });
+    bDmSeen = next;
+  }
+  function bDmToggle() {                        // 展开：藏着的那些逐行进场；收起：直接回到最近几条
+    if (!bDmLast) return;
+    bDmOpen = !bDmOpen;
+    bDmDraw(bDmLast.items, bDmLast.isLive);
+    if (!bDmOpen) {
+      var blk = $("bDm"), top = blk.getBoundingClientRect().top;
+      if (top < 0) try { window.scrollBy({ top: top - 60, behavior: bReduce() ? "auto" : "smooth" }); } catch (e) { window.scrollBy(0, top - 60); }
+    }
+  }
+  function bJump(t) {
+    seek(t);
+    var st = document.querySelector("#player .stage");
+    if (st && st.getBoundingClientRect().top < 0) {
+      try { window.scrollTo({ top: 0, behavior: bReduce() ? "auto" : "smooth" }); } catch (e) { window.scrollTo(0, 0); }
+    }
+  }
+  // 小窗那一行折叠条的字：「简介 · 评论 N」（没评论就只写「简介」）
+  function bFoldLabel(n) {
+    var hd = $("bDesc") && $("bDesc").querySelector(".b-hd"); if (!hd) return;
+    hd.textContent = n > 0 ? "简介 · 评论 " + n : "简介";
+  }
+  // 评论区：先露 5 条热评，底下一颗「更多」，点了剩下的逐条进场
+  function bCmtFold() {
+    var N = 5, body = $("cmtBody"), list = body.querySelectorAll(".c1");
+    var old = body.querySelector(".b-more"); if (old) old.remove();
+    Array.prototype.forEach.call(list, function (c, i) { if (i >= N) c.dataset.fold = "1"; else delete c.dataset.fold; });
+    if (list.length <= N) return;
+    var mb = document.createElement("button");
+    mb.type = "button"; mb.className = "b-more"; mb.textContent = "更多";
+    mb.addEventListener("click", function () {
+      var k = 0;
+      Array.prototype.forEach.call(body.querySelectorAll(".c1[data-fold]"), function (c) { delete c.dataset.fold; bIn(c, k++); });
+      mb.remove();
+    });
+    body.appendChild(mb);
+  }
+
+  // ── 开页 ──
+  bInit();
+  tellParent(false);
+  // 要开哪部：?film=<片名>，或者 #<片名>（#embed 是旗标不是片名）。
+  // ?film= 也认 BV 号（BV…[_pN]，等于 bili:BV…）、番剧 ep / ss / md 号、live:<房间号>。
+  // B 站片子直接 api/bili/add（让后端认得它、顺带直连地址）再开——链过来的人不用管后端认不认得，这页替它问。
+  var qFilm = "";
+  try { qFilm = (new URLSearchParams(location.search).get("film") || "").trim(); } catch (e) {}
+  if (/^BV[0-9A-Za-z]{10}(_p\d{1,4})?$/.test(qFilm)) qFilm = "bili:" + qFilm;
+  if (/^(ep|ss|md)\d{1,12}$/i.test(qFilm)) qFilm = "bili:" + qFilm.toLowerCase();
+  // &play=1：点开就放（App 壳里不要手势；普通浏览器拦了自动播放就停在片头，等人点）
+  var qPlay = false;
+  try { qPlay = new URLSearchParams(location.search).get("play") === "1"; } catch (e) {}
+  // &t=<秒>（也认 1:23 / 1:02:03）：进来跳到那一秒（browse/「一起聊过的片」里每句弹幕前的时间钮就是这样链过来的）
+  var qT = 0;
+  try {
+    var rawT = (new URLSearchParams(location.search).get("t") || "").trim();
+    if (/^\d+(\.\d+)?$/.test(rawT)) qT = Number(rawT);
+    else if (/^\d{1,2}(:\d{1,2}){1,2}$/.test(rawT)) qT = rawT.split(":").reduce(function (a, x) { return a * 60 + Number(x); }, 0);
+  } catch (e) {}
+  if (!(qT > 0 && qT < 864000)) qT = 0;
+  var dropQFilm = function () {            // 开上以后把 ?film= 从地址栏摘掉（hash 里已经记着），刷新/返回不打架
+    if (!qFilm) return;
+    try {
+      var sp = new URLSearchParams(location.search); sp.delete("film"); sp.delete("play"); sp.delete("t");
+      history.replaceState(null, "", location.pathname + (sp.toString() ? "?" + sp.toString() : "") + location.hash);
+    } catch (e) {}
+  };
+  var want = qFilm || ((location.hash.length > 1 && location.hash !== "#embed") ? decodeURIComponent(location.hash.slice(1)) : "");
+  if (/^live:\d{1,12}$/.test(qFilm)) { openLive(qFilm.slice(5)); dropQFilm(); }   // ?film=live:<房间号>
+  else if (want) {
+    // B 站片子不先等 /films（整份列表）再 /bili/add：直接 /bili/add 一趟（后端已认得的不出门），回信里顺带直连地址（direct=1），
+    // 省掉两趟来回。开一条只是让后端认得它（底账），不进任何单子。本地片还是从 /films 里找。
+    var m = /^bili:(BV[0-9A-Za-z]{10})(?:_p(\d{1,4}))?$/.exec(want);
+    var mg = /^bili:((?:ep|ss|md)\d{1,12})$/.exec(want);     // 番剧 / 影视：ss / md＝进账号上次看到的那一集
+    if (m || mg) {
+      post("/bili/add", { ref: mg ? mg[1] : m[1] + (m[2] && m[2] !== "1" ? "?p=" + m[2] : ""), direct: 1 }).then(function (r) {
+        if (r && r.ok && r.film) {
+          if (r.direct && r.direct.ok) directPre[r.film.id] = { d: r.direct, at: Date.now() };
+          open(r.film, { play: qPlay, t: qT }); dropQFilm();
+        } else toast((r && r.error) || "没接上");
+      }).catch(function () { toast("没接上"); });
+    } else {
+      get("/films").then(function (d) {
+        films = d.films || [];
+        var hit = null;
+        films.forEach(function (f) { if (f.id === want) hit = f; });
+        if (hit) { open(hit, { play: qPlay, t: qT }); dropQFilm(); return; }
+        if (qFilm) toast("找不到这部片子");
+      }).catch(function () { toast("片子信息没拉下来"); });
+    }
+  }
+})();
+</script>
+</body>
+</html>

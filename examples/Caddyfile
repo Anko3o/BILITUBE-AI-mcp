@@ -1,0 +1,45 @@
+# bilitube 的反向代理示例（Caddy 2）。把 example.com 换成你自己的域名。
+# 两个 Python 服务都只听 127.0.0.1，本身不做登录鉴权——门禁必须加在这一层，下面用的是 basic_auth。
+# 生成密码哈希：caddy hash-password
+# 换前缀（比如 /bilitube-test/）：把下面所有 /bilitube 一起换掉，再改 BILITUBE_URL_PREFIX 和 BILITUBE_PAGE_URL（见 README）。
+# 站点里本来开着 encode（gzip/zstd）的话，把 /bilitube/api/* 排除在外，不然直播流和长连接会被攒成一坨才发。
+# Caddy 跑的那个用户要能读 client/（和 data/films/），仓库别放在它进不去的目录里。
+example.com {
+	basic_auth /bilitube/* {
+		you $2a$14$REPLACE_WITH_YOUR_HASH
+	}
+
+	redir /bilitube /bilitube/ 308
+
+	# 后端：/bilitube/api/* → 127.0.0.1:18008/api/*
+	handle /bilitube/api/* {
+		# 封面 / 头像代理图后端自己回 Cache-Control: private, max-age=604800。站点别处给全站加了 Cache-Control 的话，
+		# 在这儿对这三条图片口改回去（同一个头 Caddy 会两份都发，no-cache 会让浏览器每张都回来问一次）：
+		# @bilitubeImg path */bili/listcover */bili/face */bili/cover
+		# header @bilitubeImg Cache-Control "private, max-age=604800"
+		request_body {
+			max_size 256KB
+		}
+		uri strip_prefix /bilitube
+		reverse_proxy 127.0.0.1:18008 {
+			flush_interval -1
+		}
+	}
+
+	# 本地片源（可选）：视频交给 Caddy 发，白拿 Range 断点续传
+	handle_path /bilitube/media/* {
+		root * /path/to/bilitube/data/films
+		@dot path_regexp /\.
+		respond @dot 404
+		file_server
+	}
+
+	# 页面：client/ 整个目录
+	handle_path /bilitube/* {
+		root * /path/to/bilitube/client
+		file_server
+	}
+}
+
+# MCP（mcp/bili_mcp.py，默认 127.0.0.1:18013/mcp）一般只给同一台机器上的 AI 客户端用，不用对外。
+# 真要从外面连，务必另加鉴权；它的回环 REST 会拒绝非本机来源。

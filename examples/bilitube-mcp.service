@@ -1,0 +1,14 @@
+# systemd 示例：bilitube 的 MCP（同时是后端要用的 B 站回环 REST）。
+[Unit]
+Description=bilitube MCP
+After=network-online.target
+
+[Service]
+User=bilitube
+WorkingDirectory=/path/to/bilitube
+EnvironmentFile=-/path/to/bilitube/examples/bilitube.env
+ExecStart=/path/to/bilitube/venv/bin/python mcp/bili_mcp.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

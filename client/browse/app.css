@@ -1,0 +1,363 @@
+/* bilitube 逛片页的版式。
+   外壳（顶栏两颗圆钮、底栏、按压手感、入场动画、设置卡）照 eryu（耳屿，CC BY-NC-SA 4.0，
+   https://github.com/sebastianevan200-stack/eryu ，© Evelyn & River）的 client/index.html 改写；
+   颜色全部读 skins.css 的变量，去掉了毛玻璃、半透明和阴影。
+   内容区参照 B 站 App 的板块排法：不画线、不画框，页底一层浅灰（--seam），内容落在白块上，
+   块与块之间留一道灰缝；选中态用实底。 */
+
+/* ── Reset（照 eryu） ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%; width: 100%; height: 100dvh;
+  font-family: var(--font-ui); font-weight: 500; color: var(--ink);
+  overflow: hidden; background: var(--seam, var(--paper));
+  -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+}
+button { font-family: inherit; cursor: pointer; color: inherit; }
+input { font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+[hidden] { display: none !important; }
+button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid rgba(var(--rose-deep-rgb), 0.55); outline-offset: 2px; border-radius: 8px;
+}
+
+/* ── App Shell（照 eryu） ── */
+#app { width: 100%; height: 100%; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; z-index: 1; background: var(--seam, var(--paper)); }
+@media (min-width: 560px) { #app { max-width: 460px; margin: 0 auto; } }
+
+/* ── Top Bar（照 eryu：左右两颗浮钮；推荐页中间是搜索条，二级页中间是标题） ── */
+/* 顶栏高度只由一个变量决定：--top-inset ＝ 安全区（--sat）＋ 54px。顶栏本身就是这么高（38px 的钮居中，上下各留 8px），
+   内容区顶上也正好让出这么多。高度写死而不靠内边距撑，免得里面某个元素稍高一点顶栏就变高、压住下面的标签行。 */
+:root { --sat: env(safe-area-inset-top, 0px); --top-inset: calc(54px + var(--sat)); }
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 6;
+  height: var(--top-inset); padding: var(--sat) 12px 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: transparent;   /* 不画带子：滚上来的内容靠 .tab-body 顶上的渐隐退场 */
+}
+.topbar-title { flex: 1; text-align: center; font-size: 15px; font-weight: 600; color: var(--ink); }
+.topbar-title:empty { display: none; }
+.topbar-btn {
+  width: 38px; height: 38px; flex-shrink: 0;
+  background: var(--paper); border: 0; border-radius: var(--r-full);
+  color: var(--rose-deep); text-decoration: none;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform var(--t-base) var(--ease-spring), background var(--t-fast) var(--ease-out);
+}
+.topbar-btn:active { transform: scale(0.9); }
+/* 搜索胶囊（照 eryu .search-bar，去掉描边）。左边的放大镜就是提交按钮，回车也能搜 */
+.search-bar {
+  flex: 1; min-width: 0; height: 38px; display: flex; align-items: center; gap: 4px; padding: 0 5px 0 6px;
+  background: var(--paper); border: 0; border-radius: var(--r-full); color: var(--ink-soft);
+}
+.search-input { flex: 1; border: none; background: transparent; font-size: 13.5px; color: var(--ink); outline: none; min-width: 0; padding: 4px 0; }
+@media (pointer: coarse) { .search-input { font-size: 16px; } }   /* iPhone：输入框字号小于 16px，点进去整页会自己放大（搜索条、房间号都是这个类） */
+.search-input::placeholder { color: var(--muted); }
+.search-input::-webkit-search-cancel-button { display: none; }
+.search-btn { background: none; border: 0; color: var(--ink-soft); padding: 6px 4px 6px 8px; border-radius: var(--r-full); display: flex; flex-shrink: 0; transition: transform var(--t-base) var(--ease-spring); }
+.search-btn .ic { opacity: 0.55; }
+.search-btn:active { transform: scale(0.9); }
+.search-clear { background: none; border: none; color: var(--muted); padding: 6px; border-radius: var(--r-full); display: flex; }
+.search-clear.hidden { display: none; }
+
+/* ── Body ── */
+.tab-body { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+/* 渐隐：遮罩挂在滚动容器本身（遮罩随容器的框走、不随内容滚动，整块只算一次，不是每行一份）。
+   顶部：顶栏下沿（--top-inset）以下完全显示，往上 --fade-top 这一段淡出；底部：贴着底栏的 --fade-bot 一段淡出。
+   淡掉的地方露出后面的页底（黑白皮是灰缝色，自定义皮是底图），所以顶栏、底栏都不需要画底色。 */
+:root { --fade-top: 12px; --fade-bot: 14px; }   /* 顶部这段要短：圆钮下沿在 --top-inset 上方 8px，再长就会从钮后面透出半截字 */
+.tab-body {
+  -webkit-mask-image: linear-gradient(to bottom, transparent calc(var(--top-inset) - var(--fade-top)), #000 var(--top-inset), #000 calc(100% - var(--fade-bot)), transparent);
+          mask-image: linear-gradient(to bottom, transparent calc(var(--top-inset) - var(--fade-top)), #000 var(--top-inset), #000 calc(100% - var(--fade-bot)), transparent);
+}
+.tab-body::-webkit-scrollbar { display: none; }
+.page { padding: var(--top-inset) 0 12px; }
+
+/* ── 入场动画（照 eryu）：列表逐行错开 --stagger，最多错开到第 14 行；切页时整页轻轻淡入。只动 transform / opacity ── */
+@keyframes stagger-in {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+.stagger-in {
+  animation: stagger-in var(--t-base) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 14) * var(--stagger));
+}
+@keyframes tab-enter { from { opacity: 0; } to { opacity: 1; } }
+.tab-body.tab-enter { animation: tab-enter var(--t-fast) var(--ease-out); }
+
+/* ── 下拉刷新：圆钮的样式同顶栏 .topbar-btn，转圈速度同 .spinner（0.6s） ── */
+.ptr {
+  position: absolute; left: 50%; top: var(--top-inset); z-index: 5; width: 36px; height: 36px; border-radius: var(--r-full);
+  background: var(--paper); color: var(--ink-soft); display: grid; place-items: center; pointer-events: none;
+  opacity: 0; transform: translate3d(-50%, -44px, 0);
+}
+.ptr .ic { display: block; }
+.ptr.busy .ic { animation: spin 0.6s linear infinite; }
+.tab-body { overscroll-behavior-y: contain; }
+
+/* ── Bottom Nav（照 eryu，改为实底） ── */
+.bottom-nav {
+  display: flex; justify-content: space-around; align-items: center;
+  margin: 0; padding: 6px 8px calc(var(--safe-bottom) + 6px);
+  background: var(--paper); flex-shrink: 0; position: relative;
+}
+.nav-item {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: none; border: none; color: var(--muted);
+  font-size: 10px; letter-spacing: 0.2px; padding: 5px 18px;
+  transition: color var(--t-fast) var(--ease-out), transform var(--t-base) var(--ease-spring);
+}
+.nav-item:active { transform: translateY(1px); }
+.nav-item.active { color: var(--key); }
+.nav-item.active span { font-weight: 600; }
+.nav-item svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: stroke-width var(--t-fast) var(--ease-out); }
+.nav-item.active svg { fill: none; stroke-width: 2.1; }
+
+/* ── 通用：白块、灰缝、空状态 ── */
+.blk { background: var(--paper); padding: 12px 16px; }
+.blk + .blk, .gap { margin-top: 8px; }
+.card { background: var(--paper); border-radius: var(--r-s); margin: 0 10px 10px; padding: 12px 14px; }
+.blk-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.blk-hd .t { font-size: 15px; font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blk-hd .more { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 1px; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; }
+.empty-line { padding: 18px 16px; color: var(--muted); font-size: 12.5px; letter-spacing: .02em; }
+.demo { font-size: 10.5px; font-weight: 600; color: var(--muted); background: var(--milk); border-radius: var(--r-full); padding: 2px 8px; }
+.demo-row { padding: 0 16px 8px; }
+
+/* 标签：未选中只有灰字，选中为实底（推荐/热门/直播、关注里的人、追番/追剧） */
+.tabs { display: flex; align-items: center; gap: 4px; padding: 0 12px 8px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: 0 0 auto; border: 0; background: none; color: var(--muted); font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: var(--r-full); white-space: nowrap; }
+.tab.on { background: var(--key); color: var(--key-ink); font-weight: 600; }
+.tabs .sp { flex: 1; }
+.tab.icon { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); }
+
+/* ── 封面 ── */
+.cv { position: relative; width: 100%; aspect-ratio: 16 / 10; overflow: hidden; background: var(--cv-bg, var(--milk)) center / cover no-repeat; border-radius: 6px; }
+.cv.ph { background-image: linear-gradient(135deg, hsl(var(--h, 330) 30% 84%), hsl(calc(var(--h, 330) + 30) 26% 72%)); }
+html[data-theme="dark"] .cv.ph { background-image: linear-gradient(135deg, hsl(var(--h, 330) 16% 30%), hsl(calc(var(--h, 330) + 30) 14% 20%)); }
+/* 封面底部一层从下往上的暗渐变：播放量、弹幕数在左，时长在右 */
+.cv .ov {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 7px 5px; display: flex; align-items: center; gap: 9px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0)); color: #fff;
+  font: 500 10.5px/1 var(--font-ui); letter-spacing: 0.01em;
+}
+.cv .ov span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.cv .ov .r { margin-left: auto; font-family: var(--font-mono); font-weight: 600; }
+.cv .ov svg { width: 12px; height: 12px; }
+/* 封面是 <img loading=lazy>（直连 B 站图床小图），到了再淡进来；叠在暗渐变那层底下 */
+.cv .cvi { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-fast, .18s) ease-out; }
+.cv .cvi.on { opacity: 1; }
+.cv .ov { z-index: 1; }
+
+/* 推荐：两列白卡（卡片没有边框，靠灰缝分开） */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 8px; }
+.vc { min-width: 0; cursor: pointer; display: block; background: var(--paper); border-radius: 6px; overflow: hidden; transition: transform var(--t-base) var(--ease-spring); }
+.vc .cv { border-radius: 0; }
+.vc .t { padding: 8px 8px 0; font-size: 13px; font-weight: 400; line-height: 1.45; color: var(--ink); min-height: calc(2.9em + 8px);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vc .m { padding: 6px 8px 9px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc:active { transform: scale(0.978); }
+.more-row { display: flex; justify-content: center; padding: 14px 0 4px; }
+
+/* 一排三张（收藏夹预览、AI 入口卡） */
+.row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.row3 .it { min-width: 0; cursor: pointer; }
+.row3 .t { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 一行一条（历史记录、稍后再看、播放列表、番剧）：左边封面，右边标题和灰字，行与行之间只留空白 */
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; gap: 12px; padding: 8px 16px; cursor: pointer; background: var(--paper); transition: transform var(--t-base) var(--ease-spring), background var(--t-fast) var(--ease-out); }
+.row:active { background: var(--milk); }
+/* 列表行按下时轻微缩小（照 eryu 的按压手感） */
+.row:active, .post:active, .lv:active { transform: scale(0.978); }
+.post, .lv { transition: transform var(--t-base) var(--ease-spring), background var(--t-fast) var(--ease-out); }
+
+/* ── 横滑删除（播放列表 / 稍后再看）：行底下垫一层删除按钮，往哪边滑就从哪边露出来；滑过半行变成红底＝松手就删 ── */
+.sw { position: relative; overflow: hidden; }
+.sw-act { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 28px; background: var(--milk); color: var(--ink-soft); cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+.sw.l .sw-act { justify-content: flex-start; }
+.sw.l .sw-act, .sw.r .sw-act { opacity: 1; }
+.sw.go .sw-act, .sw.open .sw-act { background: var(--bad); color: #fff; }
+.sw-ic { display: inline-flex; transition: transform var(--t-base) var(--ease-spring); }
+.sw.go .sw-ic { transform: scale(1.15); }
+.sw .row { position: relative; touch-action: pan-y; will-change: transform; transition: transform var(--t-base) var(--ease-out), background var(--t-fast) var(--ease-out); }
+.sw.gone { opacity: 0; transition: opacity var(--t-fast) var(--ease-out); }
+.sw.gone .row { transition: transform .26s var(--ease-out); }
+.row .cv { width: 136px; flex-shrink: 0; }
+.row .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.row .t { font-size: 13.5px; font-weight: 400; line-height: 1.45; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.row .m { margin-top: auto; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
+.grp { font-size: 15px; font-weight: 600; padding: 14px 16px 6px; }
+.blk.flush { padding: 0 0 8px; }
+
+/* ── 关注 ── */
+.live-sum { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 2px 0; }
+.live-sum + .live-sum { margin-top: 10px; }
+.live-sum .fa { width: 28px; height: 28px; border-radius: 50%; background: var(--milk) center / cover; flex-shrink: 0; }
+.live-sum .k { font-size: 12px; font-weight: 600; background: var(--key); color: var(--key-ink); border-radius: 4px; padding: 2px 5px; flex-shrink: 0; }
+.live-sum .tx { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-sum .tx b { font-weight: 600; margin-right: 6px; }
+.live-sum .tx span { color: var(--muted); }
+/* AI 主页的「关注」：一行四个，头像圆＋名字一行 */
+.fg-ups { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 6px; }
+.fg-up { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); }
+.fg-up .fa { width: 44px; height: 44px; border-radius: 50%; background: var(--milk) center / cover; }
+.fg-up .nm { max-width: 100%; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.post { background: var(--paper); padding: 12px 16px 14px; cursor: pointer; }
+.post + .post { margin-top: 8px; }
+.post .who { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.post .when { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.post .cv { margin-top: 10px; aspect-ratio: 16 / 9; }
+.post .t { margin-top: 9px; font-size: 14px; font-weight: 500; line-height: 1.45; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.post .cv .ov { padding: 26px 10px 8px; font-size: 11.5px; }
+
+/* ── 我的（参照 B 站 App 的「我的」：头像在左、名字在右，一排数字，下面是图标宫格） ── */
+.me-top { display: flex; align-items: center; gap: 14px; }
+/* 头像圆：有图就铺满；没图是纯色圆里一个线条小人 */
+.av { display: inline-grid; place-items: center; flex-shrink: 0; border-radius: 50%; border: 0; padding: 0; background: var(--milk) center / cover no-repeat; color: var(--muted); }
+.av.ph { background-image: none; }
+.me-av { width: 60px; height: 60px; cursor: pointer; transition: transform var(--t-base) var(--ease-spring); }
+.me-av:active { transform: scale(0.94); }
+.av.sm { width: 26px; height: 26px; }
+.me-who { min-width: 0; }
+.me-name { font-size: 18px; font-weight: 600; color: var(--ink); }
+.me-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.nums { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 16px; }
+.num { display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: 0; padding: 2px 0; }
+.num b { font-size: 16px; font-weight: 600; color: var(--ink); }
+.num span { font-size: 11px; color: var(--muted); }
+.gd-t { font-size: 15px; font-weight: 600; color: var(--ink); margin: 2px 0 4px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); }
+.gi { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 0; background: none; border: 0; color: var(--ink); border-radius: var(--r-s); }
+.gi:active { background: var(--milk); }
+.gi span { font-size: 12px; color: var(--ink-soft); }
+
+/* ── AI 的入口卡（「我的」页最下面）和 AI 的主页 ── */
+.pal-card { cursor: pointer; padding-bottom: 14px; transition: background var(--t-fast) var(--ease-out); }
+.pal-card:active { background: var(--milk); }
+.pal-card .blk-hd { margin-bottom: 10px; }
+.pal-top .me-top { margin-bottom: 2px; }
+.pal-empty { font-size: 12.5px; color: var(--muted); padding: 2px 0 2px; }
+.pal-top { padding: 18px 16px 14px; }
+.nums.n3 { grid-template-columns: repeat(3, 1fr); }
+.nums div.num { cursor: default; }
+.sec { display: flex; align-items: center; padding: 18px 16px 8px; }
+.sec > span { font-size: 15px; font-weight: 600; color: var(--ink); }
+.sec .more { margin-left: auto; display: inline-flex; align-items: center; gap: 1px; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; }
+.sec + div > .empty-line, .sec + .empty-line { padding-top: 4px; }
+.pdm { display: flex; gap: 10px; align-items: baseline; }
+.pdm + .pdm { margin-top: 12px; }
+.pdm .tx { flex: 1; min-width: 0; }
+.pdm .s { font-size: 13.5px; line-height: 1.55; color: var(--ink); word-break: break-word; }
+.pdm .m { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 聊过的片：一部片一张白卡（无边框），每行是时间钮＋一条弹幕 ── */
+.tk-film { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.tk-film .cv { width: 104px; flex-shrink: 0; }
+.tk-film .tx { flex: 1; min-width: 0; }
+.tk-film .t { font-size: 13.5px; font-weight: 500; line-height: 1.45; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tk-film .m { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.tk-lines { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ln { display: flex; gap: 8px; align-items: baseline; }
+.ts { flex: 0 0 auto; min-width: 50px; text-align: center; font: 600 11px/1 var(--font-mono); color: var(--key); background: var(--milk); border-radius: var(--r-full); padding: 4px 7px; border: 0; }
+.ts.same { visibility: hidden; }
+.ln .tx { font-size: 13.5px; line-height: 1.6; color: var(--ink); word-break: break-word; }
+.ln.ai .tx { color: var(--ink-soft); }
+.ln.ai .who { font-size: 11px; font-weight: 600; color: var(--muted); margin-right: 6px; }
+.ln .more-lines { font-size: 12px; color: var(--muted); padding-left: 58px; }
+.mo { font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 16px 10px; }
+
+/* ── 按压手感（照 eryu）：按下时过渡缩短到 --t-press，松手再按原速回弹 ── */
+button:active, .nav-item:active, .row:active, .tab:active, .vc:active, .post:active, .lv:active {
+  transition-duration: var(--t-press) !important;
+  transition-timing-function: var(--ease-press) !important;
+}
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(76px + var(--safe-bottom)); transform: translateX(-50%); z-index: 9300;
+  display: flex; align-items: center; gap: 14px;
+  background: rgb(var(--pop-rgb)); color: var(--on-pop); font-size: 12.5px; padding: 8px 16px; border-radius: var(--r-full);
+  white-space: nowrap; animation: fadeUp var(--t-fast) var(--ease-out);   /* 照 eryu .toast 的 fadeUp，补上 translateX(-50%) */
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.toast-act { background: none; border: 0; color: var(--on-pop); font-size: 12.5px; font-weight: 700; padding: 2px 0; text-decoration: underline; text-underline-offset: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 照 eryu .spinner */
+.spinner {
+  width: 22px; height: 22px; border: 2.5px solid rgba(var(--rose-rgb), 0.2);
+  border-top-color: var(--accent-soft); border-radius: 50%;
+  animation: spin 0.6s linear infinite; margin: 34px auto;
+}
+.sk { background: var(--milk); border-radius: 6px; }
+
+/* 设置卡（行、按钮、色块的样式在 skins.css）项目较多，矮屏上卡片内部滚动 */
+.set-card { max-height: calc(100% - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); /* 不认 dvh 的旧 iPhone（iOS 15.4 以前）用这行 */ max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.set-card::-webkit-scrollbar { display: none; }
+.hs-avatar.av { width: 34px; height: 34px; }
+/* 扫码卡：二维码是后端（mcp/bili_mcp.py）生成的 png */
+.qr-box {
+  margin: 14px auto 10px; width: 196px; height: 196px; background: #fff; border-radius: 14px; padding: 8px;
+  display: grid; place-items: center;
+}
+.qr-box svg, .qr-box img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.qr-box .spinner { margin: 0; }
+.qr-msg { font-size: 12.5px; color: var(--ink-soft); min-height: 1.6em; line-height: 1.6; }
+.acct { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 16px 0 8px; }
+.acct-av { width: 64px; height: 64px; }
+.acct-name { font-size: 15px; font-weight: 600; color: var(--ink); }
+
+/* ── 直播（推荐页第三个标签）：房间号输入条＋关注的人在播 ── */
+.room-in { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 14px; background: var(--seam, var(--milk)); border-radius: var(--r-full); color: var(--ink-soft); }
+.room-in > .ic { opacity: 0.55; }
+.room-in .search-input { padding: 6px 0; }
+.room-go { width: 32px; height: 32px; border: 0; border-radius: var(--r-full); background: var(--key); color: var(--key-ink); display: grid; place-items: center; flex-shrink: 0; transition: transform var(--t-base) var(--ease-spring); }
+.room-go:active { transform: scale(0.9); }
+.lv { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; border-radius: var(--r-s); }
+.lv .av { width: 40px; height: 40px; }
+.lv .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lv .tx b { font-size: 14px; font-weight: 600; color: var(--ink); }
+.lv .tx span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv > .ic { color: var(--muted); }
+
+.ic { display: block; flex-shrink: 0; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── 自定义皮＋自传底图（html[data-bg=own]）：底图从顶栏一直透到底栏，中间不被切成一条一条。
+   区块（.blk、小标题、「我的」页的数字和宫格）都去掉自己的底色，字直接落在图上（图上那层薄纱 --wash 在 skins.css）；
+   只有承载文字的元素——视频卡、列表行、动态、直播行、输入条——垫同一层淡底 --film，带圆角、彼此留缝，不画线不画框。
+   顶栏两颗圆钮和搜索条用 --chip，底栏透明。没传图的自定义皮不受这一段影响，就是黑白皮换了主题色。 ── */
+html[data-bg="own"], html[data-bg="own"] body { background: var(--paper); }
+html[data-bg="own"] #app, html[data-bg="own"] .blk { background: transparent; }
+html[data-bg="own"] .bottom-nav { background: transparent; }
+html[data-bg="own"] .tab { color: var(--ink-soft); }   /* 未选中的标签直接落在图上，灰字加深一档 */
+html[data-bg="own"] .ptr, html[data-bg="own"] .room-in,
+html[data-bg="own"] .vc, html[data-bg="own"] .card, html[data-bg="own"] .post,
+html[data-bg="own"] .row, html[data-bg="own"] .lv { background: var(--film); }
+html[data-bg="own"] .topbar-btn, html[data-bg="own"] .search-bar { background: var(--chip); }   /* 浮在图上的两颗钮和搜索条 */
+html[data-bg="own"] .post { margin: 0 8px; border-radius: var(--r-s); }
+html[data-bg="own"] .rows { gap: 6px; padding: 0 8px; }
+html[data-bg="own"] .row, html[data-bg="own"] .sw { border-radius: var(--r-s); }
+html[data-bg="own"] .lv { padding: 8px 10px; }
+html[data-bg="own"] .lv + .lv { margin-top: 6px; }
+html[data-bg="own"] .sw.l .row, html[data-bg="own"] .sw.r .row { background: var(--paper); }   /* 横滑时挡住底下那层删除按钮 */
+html[data-bg="own"] .av { background-color: var(--film-2); }   /* 没头像时的圆别显示成实心灰块 */
+html[data-bg="own"] .ts, html[data-bg="own"] .row:active, html[data-bg="own"] .lv:active, html[data-bg="own"] .gi:active { background: var(--film-2); }
+
+/* ── 嵌入模式（html[data-embed]，?embed=1）：给宿主聊天页 iframe 用的窄版。没有底栏（「关注」从「我的」宫格进，
+   「聊过」在「我的」那排数字里），顶栏矮一档，推荐页右边那颗钮是「我的」（见 app.js show()）；提示条贴底。 ── */
+html[data-embed] { --top-inset: 48px; }
+html[data-embed] #app { max-width: none; }
+html[data-embed] .bottom-nav { display: none; }
+html[data-embed] .topbar { padding: 0 10px; }
+html[data-embed] .topbar-btn { width: 34px; height: 34px; }
+html[data-embed] .search-bar { height: 34px; }
+html[data-embed] .toast { bottom: 12px; }
+html[data-embed] .ts { color: var(--ink-soft); }
+html[data-embed] .row .cv { width: 120px; }
+
+/* 「我的」最底下那行不起眼的「本地片」（服务器上存着的片子，B 站稍后再看装不了；有才露） */
+.local-link { display: flex; justify-content: center; padding: 18px 0 8px; }
+.local-link button { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 6px 10px; }
