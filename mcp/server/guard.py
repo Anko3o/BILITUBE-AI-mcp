@@ -30,6 +30,8 @@ Python 重写，没有搬代码；见仓库根目录的 NOTICE。
   follow_min_gap_s     BILI_FOLLOW_MIN_GAP        MCP 通道两次关注／取关之间至少隔几秒，默认 60；0 = 不限
                        （同时计进 write_hourly_budget，哪份先满就先停；没到间隔直接拒，不排队、不自动重试。）
   pause_file           BILI_PAUSE_FILE            暂停标记放哪，默认 mcp/state/paused.json
+  scene_keep_days      BILI_SCENE_KEEP_DAYS       BILITUBE_IMAGE_DIR 里的截图（att-scene-*）和封面（att-bili-cover-*）留几天，默认 7；0 = 不清
+                       （MCP 服务启动时清一次、之后每天一次，只删这两类，见 server/sweep.py）
 """
 import collections
 import contextlib
@@ -57,6 +59,7 @@ DEFAULTS = {
     "follow_hourly_budget": 5,
     "follow_min_gap_s": 60,
     "pause_file": os.path.join(BILI_ROOT, "state", "paused.json"),
+    "scene_keep_days": 7,
 }
 _ENV = {
     "pocket_folder_id": "BILI_POCKET_FOLDER_ID",
@@ -70,6 +73,7 @@ _ENV = {
     "follow_hourly_budget": "BILI_FOLLOW_HOURLY_BUDGET",
     "follow_min_gap_s": "BILI_FOLLOW_MIN_GAP",
     "pause_file": "BILI_PAUSE_FILE",
+    "scene_keep_days": "BILI_SCENE_KEEP_DAYS",
 }
 
 

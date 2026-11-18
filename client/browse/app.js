@@ -515,20 +515,122 @@
     root.querySelectorAll("[data-unfold]").forEach(function (b) { b.onclick = function () { b.parentNode.querySelectorAll(".ln[hidden]").forEach(function (x) { x.hidden = false; }); b.remove(); }; });
   }
   function monthOf(day) { var m = String(day || "").match(/^(\d{4})-(\d{2})/); return m ? (+m[2]) + " 月" : ""; }
+  // 「聊过」页按关键词找：/dm/log 是一次全拿回来的（片子一览＋每部的全部私人弹幕，不分页），所以只在页面里过滤。
+  // 空格隔开的几个词都要沾上（片名 / UP / 片子 id / 两个人的弹幕，哪处都算）；弹幕里命中的，片名下面先露最近的一两句并标出关键词，
+  // 原来那几行收进「全部 N 句」。
+  var TKQ = "";
+  function tkTerms(q) { return String(q || "").toLowerCase().split(/\s+/).filter(Boolean); }
+  function tkHas(s, t) { return String(s || "").toLowerCase().indexOf(t) >= 0; }
+  function tkHitLines(x, terms) { return (x.lines || []).filter(function (l) { return terms.some(function (t) { return tkHas(l.text, t); }); }); }
+  function tkMatch(x, terms) {
+    var head = [x.title, x.up, x.film, x.bvid].join("\n");
+    return terms.every(function (t) { return tkHas(head, t) || (x.lines || []).some(function (l) { return tkHas(l.text, t); }); });
+  }
+  function tkHitsHTML(x, i, hits) {
+    var isLive = /^live:/.test(String(x.film || ""));
+    var show = hits.slice().sort(function (a, b) { return (a.at || "") < (b.at || "") ? 1 : -1; }).slice(0, 2);   // 最近说的那两句
+    return '<div class="tk-lines tk-hits">' + show.map(function (l) {
+      return '<div class="ln ' + (l.who === "me" ? "me" : "ai") + '"><button class="ts" type="button" data-i="' + i + '" data-t="' + (l.t || 0) + '">' + (isLive ? local(l.at).hm : fmtT(l.t)) + "</button>" +
+        '<span class="tx">' + (l.who === "me" ? "" : '<span class="who" data-nm="ai">' + esc(aiName()) + "</span>") + esc(l.text) + "</span></div>";
+    }).join("") + (hits.length > show.length ? '<div class="tk-hits-n">还有 ' + (hits.length - show.length) + " 句也说到</div>" : "") + "</div>";
+  }
+  // 标出关键词：只动片名、UP 那行和命中的那几句里的字，AI 的署名不标
+  function tkMark(root, terms) {
+    if (!terms.length) return;
+    root.querySelectorAll(".tk-film .t, .tk-film .m, .tk-hits .tx").forEach(function (el) {
+      var w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null), nodes = [], n;
+      while ((n = w.nextNode())) if (!(n.parentNode.closest && n.parentNode.closest(".who"))) nodes.push(n);
+      nodes.forEach(function (node) {
+        var s = node.nodeValue, low = s.toLowerCase(), marks = [];
+        terms.forEach(function (t) { for (var k = low.indexOf(t); k >= 0; k = low.indexOf(t, k + t.length)) marks.push([k, k + t.length]); });
+        if (!marks.length) return;
+        marks.sort(function (a, b) { return a[0] - b[0]; });
+        var frag = document.createDocumentFragment(), at = 0;
+        marks.forEach(function (m) {
+          if (m[1] <= at) return;
+          var a = Math.max(m[0], at);
+          if (a > at) frag.appendChild(document.createTextNode(s.slice(at, a)));
+          var mk = document.createElement("mark"); mk.className = "hl"; mk.textContent = s.slice(a, m[1]); frag.appendChild(mk);
+          at = m[1];
+        });
+        if (at < s.length) frag.appendChild(document.createTextNode(s.slice(at)));
+        node.parentNode.replaceChild(frag, node);
+      });
+    });
+  }
+  function tkDraw(box, d, all) {
+    var terms = tkTerms(TKQ), list = terms.length ? all.filter(function (x) { return tkMatch(x, terms); }) : all;
+    if (!list.length) { box.innerHTML = '<div class="empty-line">没找到带「' + esc(TKQ.trim()) + "」的片</div>"; return; }
+    var html = d.src === "demo" ? '<div class="demo-row">' + demoTag({ demo: true }) + "</div>" : "", lastM = null;
+    list.forEach(function (x, i) {
+      var mth = monthOf(local(lastAt(x)).day);
+      if (mth !== lastM) { html += '<div class="mo">' + esc(mth) + "</div>"; lastM = mth; }
+      var card = tkCardHTML(x, i, 4), hits = terms.length ? tkHitLines(x, terms) : [];
+      if (terms.length) card = card.replace("card stagger-in", "card");   // 边打字边过滤时不要每次都重新飘进来
+      if (hits.length) {   // 原来那几行原样留着，先收起来（命中的一两句就是全部的话，不给「全部」按钮）
+        var more = x.lines.length > Math.min(hits.length, 2);
+        card = card.replace('<div class="tk-lines">', tkHitsHTML(x, i, hits) + (more ? '<button class="tab more-lines tk-all" type="button" data-allines>全部 ' + x.lines.length + " 句</button>" : "") + '<div class="tk-lines" hidden>');
+      }
+      // 横滑删除（和「稍后再看」同一套 swipeList）：卡片外面包一层 .sw，底下垫删除；桌面上右上角有一颗不显眼的小叉
+      var at = card.indexOf(">") + 1;
+      card = card.slice(0, at) + '<button class="sw-x" type="button" title="删掉这部片下面的私人弹幕" aria-label="删掉这部片下面的私人弹幕">' + I("x", 13, 2) + "</button>" + card.slice(at);
+      html += '<div class="sw tk-sw" data-k="' + i + '"><div class="sw-act" aria-hidden="true"><span class="sw-ic">' + I("trash", 20, 1.8) + "</span></div>" + card + "</div>";
+    });
+    box.innerHTML = '<div class="tk-cards">' + html + "</div>";
+    var cards = box.firstChild;
+    bindTk(cards, list);
+    cards.querySelectorAll("[data-allines]").forEach(function (b) { b.onclick = function () { b.nextElementSibling.hidden = false; b.remove(); }; });
+    tkMark(cards, terms);
+    swipeList(cards, function (k) { return tkForget(cards, d, all, list[k], k); }, ".card");
+  }
+  // 删一部片下面两个人的私人弹幕：先确认一次；删了先从列表里拿掉（底下 4 秒「撤销」），然后才真发 POST /dm/log/trash（后端软删除，挪进回收）。
+  // 后端是旧版本（回「没有这条路」）或者别的原因没删成：卡片原样放回去，说一句人话，不假装删掉。
+  function tkForget(cards, d, all, x, k) {
+    if (!x) return null;
+    var n = (x.lines || []).length;
+    if (!window.confirm("删掉这部片下面我们聊过的 " + n + " 条弹幕？片子本身不动。\n\n" + (x.title || x.film))) return null;
+    var el = cards.querySelector('.sw[data-k="' + k + '"]'), parent = el && el.parentNode, next = el && el.nextSibling;
+    var drop = function () {   // 真删成了：从数据里拿掉，空下来的月份标题一起收
+      [d.list, all].forEach(function (a) { var j = a.indexOf(x); if (j >= 0) a.splice(j, 1); });
+      if (parent) parent.querySelectorAll(".mo").forEach(function (mo) { var nx = mo.nextElementSibling; if (!nx || nx.classList.contains("mo")) mo.remove(); });
+      if (TK && TK.list && TK.list !== d.list) { var j = TK.list.indexOf(x); if (j >= 0) TK.list.splice(j, 1); }
+    };
+    var back = function (msg) {
+      toast(msg);
+      if (!el || !parent || !parent.isConnected) return;
+      el.classList.remove("gone", "open", "l", "r", "go");
+      var c = el.querySelector(".card"); if (c) c.style.transform = "";
+      parent.insertBefore(el, next && next.parentNode === parent ? next : null);
+    };
+    return { label: "删掉了 " + n + " 条弹幕", commit: function () {
+      if (DEMO || d.src === "demo") { drop(); return; }   // 示例数据不真删
+      post("dmTrash", { film: x.film }).then(drop).catch(function (e) {
+        var m = (e && e.message) || "";
+        if (/下面没有私人弹幕/.test(m)) { drop(); return; }   // 别处已经删过了
+        if (/没有这条路|HTTP 404/.test(m)) back("还删不了：后端还是旧版本，重启一下后端再试，这部片先留着");
+        else if (e instanceof TypeError) back("没连上后端，没删掉，这部片先留着");
+        else back("没删掉" + (m ? "：" + m : "") + "，这部片先留着");
+      });
+    } };
+  }
   function talkedRender() {
     var pg = $("pg-talked");
     pg.innerHTML = '<div class="card"><div class="sk" style="height:90px"></div></div>';
     return talkedData().then(function (d) {
       var list = sortTk(d.list);
       if (!list.length) { pg.innerHTML = '<div class="empty-line">还没在哪部片里停下来聊过</div>'; return; }
-      var html = d.src === "demo" ? '<div class="demo-row">' + demoTag({ demo: true }) + "</div>" : "", lastM = null;
-      list.forEach(function (x, i) {
-        var mth = monthOf(local(lastAt(x)).day);
-        if (mth !== lastM) { html += '<div class="mo">' + esc(mth) + "</div>"; lastM = mth; }
-        html += tkCardHTML(x, i, 4);
-      });
-      pg.innerHTML = html;
-      bindTk(pg, list);
+      pg.innerHTML = '<form class="tk-search search-bar" id="tkSearch" role="search" autocomplete="off">' +
+        '<button class="search-btn" type="submit" aria-label="找">' + I("search", 16, 2) + "</button>" +
+        '<input class="search-input" id="tkIn" type="search" placeholder="找片名、UP、我们说过的话" aria-label="在聊过的片里找" enterkeyhint="search">' +
+        '<button class="search-clear' + (TKQ ? "" : " hidden") + '" id="tkX" type="button" aria-label="清掉">' + I("x", 14, 2) + "</button></form>" +
+        '<div id="tkList"></div>';
+      var box = $("tkList"), inp = $("tkIn"), timer = null;
+      inp.value = TKQ;
+      var apply = function () { clearTimeout(timer); timer = null; if (inp.value === TKQ) return; TKQ = inp.value; tkDraw(box, d, list); };
+      inp.oninput = function () { $("tkX").classList.toggle("hidden", !inp.value); clearTimeout(timer); timer = setTimeout(apply, 200); };   // 防抖：停手 0.2 秒才重画
+      $("tkSearch").onsubmit = function (e) { e.preventDefault(); apply(); inp.blur(); };
+      $("tkX").onclick = function () { inp.value = ""; $("tkX").classList.add("hidden"); apply(); inp.focus(); };
+      tkDraw(box, d, list);
     });
   }
 
@@ -697,14 +799,15 @@
   function flushPending() { if (PEND) { var p = PEND; PEND = null; p.commit(); } }
   window.addEventListener("pagehide", flushPending);
   document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") flushPending(); });
-  function swipeList(root, onDelete) {
-    var openRow = null;
+  // rowSel：跟手移动的那一块，默认 .row（「聊过」页传 .card）；行里有 .sw-x（桌面上的小叉）的话，点它等于滑开再点删除
+  function swipeList(root, onDelete, rowSel) {
+    var openRow = null, SEL = rowSel || ".row";
     var closeOpen = function (except) {
-      if (openRow && openRow !== except) { var r = openRow.querySelector(".row"); r.style.transition = ""; r.style.transform = ""; openRow.classList.remove("open"); openRow = null; }
+      if (openRow && openRow !== except) { var r = openRow.querySelector(SEL); r.style.transition = ""; r.style.transform = ""; openRow.classList.remove("open"); openRow = null; }
     };
     var EDGE = 24, OPEN = 76;
     root.querySelectorAll(".sw").forEach(function (sw) {
-      var row = sw.querySelector(".row"), st = null;
+      var row = sw.querySelector(SEL), st = null;
       var setX = function (x) { row.style.transform = x ? "translate3d(" + x + "px,0,0)" : ""; sw.classList.toggle("l", x > 0); sw.classList.toggle("r", x < 0); };
       row.addEventListener("pointerdown", function (e) {
         if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -741,6 +844,8 @@
       row.addEventListener("pointerup", end);
       row.addEventListener("pointercancel", function (e) { if (st && e.pointerId === st.id) { st = null; row.style.transition = ""; setX(0); sw.classList.remove("open", "go"); } });
       sw.querySelector(".sw-act").addEventListener("click", function () { if (sw.classList.contains("open")) kill(sw, sw.classList.contains("l") ? 1 : -1); });
+      var sx = sw.querySelector(".sw-x");
+      if (sx) sx.addEventListener("click", function (e) { e.stopPropagation(); e.preventDefault(); kill(sw, -1); });
       // 半开时点这一行＝合上，不去播放
       sw.addEventListener("click", function (e) {
         if (!row.contains(e.target)) return;
@@ -750,7 +855,7 @@
     });
     root.addEventListener("click", function (e) { if (openRow && !openRow.contains(e.target)) closeOpen(); }, true);
     function kill(sw, dir) {
-      var row = sw.querySelector(".row"), k = +sw.dataset.k;
+      var row = sw.querySelector(SEL), k = +sw.dataset.k;
       var job = onDelete(k);
       if (!job) { row.style.transform = ""; sw.classList.remove("open", "l", "r"); openRow = null; return; }
       flushPending();

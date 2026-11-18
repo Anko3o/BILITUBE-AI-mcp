@@ -505,12 +505,15 @@ def push(text):
     threading.Thread(target=push_post, args=(payload, text), daemon=True).start()
 
 
+_ev_lock = threading.Lock()   # 只管 events.jsonl 的读改写；永远在最里层拿，拿着它时不再拿别的锁
+
+
 def journal(kind, film, **extra):
     """本地流水 events.jsonl：一行一件事。小事件默认不进聊天，但都记在这里。"""
     rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), "kind": kind, "film": film}
     rec.update({k: v for k, v in extra.items() if v is not None})
     try:
-        with open(EVENTS_LOG, "a", encoding="utf-8") as f:
+        with _ev_lock, open(EVENTS_LOG, "a", encoding="utf-8") as f:   # 和整份重写（删一条 / 删一部）错开，免得刚追加的那行被覆盖
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
         log("events.jsonl 写不进去", e)
@@ -1057,11 +1060,101 @@ def companion_dm_delete(fid, lid):
                 continue
             keep.append(line)
         if gone:
-            tmp = EVENTS_LOG + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.writelines(keep)
-            os.replace(tmp, EVENTS_LOG)
+            with _ev_lock:
+                tmp = EVENTS_LOG + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.writelines(keep)
+                os.replace(tmp, EVENTS_LOG)
     return gone
+
+
+# ── 删一整部片下面两个人的私人弹幕（「聊过」页横滑删除）──
+# 只给页面用：POST /api/dm/log/trash {film}，用户在页面上滑开、点删除、再确认一次才会来；MCP 工具里没有这个动作。
+# 软删除：events.jsonl 里这部片 kind=danmaku 的那些行原样抄进 DATA_DIR/trash/dmlog-<片>-<时刻>.json（带删除时间），再从流水里拿掉。
+# 片子本身、批注、别的流水（开映 / 暂停 / 看完）都不动。顺手清掉：TA 最近一条的缓存、弹幕小池子里这部片的、
+# 直播那几条弹幕存的截帧（FRAME_DIR 里的 live-dm-<房间>-<id>.jpg）。回收文件不会自动清，要清自己删 trash/dmlog-*.json。
+# 删错了想接回来：cd server && python3 -c 'import bilitube_server as S; print(S.dm_log_untrash("<DATA_DIR>/trash/dmlog-….json"))'
+# （只往 events.jsonl 末尾追加，服务不用停；接回来以后把那份回收文件挪走，免得接两遍）。
+DM_TRASH_PREFIX = "dmlog-"
+
+
+def dm_log_trash(fid):
+    """返回 (结果, None) 或 (None, 原因)。结果 {ok, film, title, removed, trash, shots}。"""
+    fid = str(fid or "").strip()
+    if not fid:
+        return None, "没给片子号"
+    title = title_of(fid)   # 先拿：直播的名字是从这些行里认出来的，删了就认不出了
+    with _lock, _ev_lock:
+        try:
+            with open(EVENTS_LOG, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            lines = []
+        keep, gone = [], []
+        for line in lines:
+            try:
+                r = json.loads(line)
+            except Exception:
+                keep.append(line)
+                continue
+            if isinstance(r, dict) and r.get("kind") == "danmaku" and r.get("film") == fid:
+                gone.append(line if line.endswith("\n") else line + "\n")
+                continue
+            keep.append(line)
+        if not gone:
+            return None, "这部片下面没有私人弹幕"
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        safe = re.sub(r"[^\w.\-]+", "_", fid)[:80]
+        name = f"{DM_TRASH_PREFIX}{safe}-{stamp}-{int(time.time() * 1000) % 1000:03d}.json"
+        dest = os.path.join(TRASH_DIR, name)
+        rec = {"film": fid, "title": title, "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+               "count": len(gone), "lines": gone}
+        os.makedirs(TRASH_DIR, exist_ok=True)
+        with open(dest + ".tmp", "w", encoding="utf-8") as f:   # 先把回收文件写好，再改流水
+            json.dump(rec, f, ensure_ascii=False, indent=1)
+        os.replace(dest + ".tmp", dest)
+        tmp = EVENTS_LOG + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(keep)
+        os.replace(tmp, EVENTS_LOG)
+        _last_user_dm.pop(fid, None)
+        _dmsay[:] = [p for p in _dmsay if p.get("film") != fid]
+    shots = 0
+    m = re.fullmatch(r"live:(\d{1,12})", fid)   # 截帧存的时候用的就是记录里这个房间号
+    if m:
+        room = int(m.group(1))
+        lids = set()
+        for line in gone:
+            try:
+                lid = json.loads(line).get("id")
+            except Exception:
+                lid = None
+            if lid:
+                lids.add(str(lid))
+        for lid in lids:
+            try:
+                os.remove(live_dm_shot_path(room, lid))
+                shots += 1
+            except OSError:
+                pass
+        with _lock:
+            c = _live_dm_last.get(room)
+            if c and str(c[1]) in lids:
+                _live_dm_last.pop(room, None)
+    log("私人弹幕进回收", fid, len(gone), "条 →", name)
+    return {"ok": True, "film": fid, "title": title, "removed": len(gone), "trash": name, "shots": shots}, None
+
+
+def dm_log_untrash(path):
+    """把 dm_log_trash 收走的那几行原样接回 events.jsonl 末尾（行里带着原来的 at，读的时候不靠位置排）。返回接回几行。"""
+    with open(path, "r", encoding="utf-8") as f:
+        rec = json.load(f)
+    lines = [l if l.endswith("\n") else l + "\n" for l in rec.get("lines") or []]
+    with _ev_lock, open(EVENTS_LOG, "a", encoding="utf-8") as f:
+        f.writelines(lines)
+    with _lock:
+        _last_user_dm.pop(rec.get("film"), None)
+    return len(lines)
 
 
 # ── 前一秒 / 这一秒 / 后一秒：字幕和弹幕按秒对齐；watching look（/api/around）和弹幕推送共用 ──
@@ -3961,6 +4054,11 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/remove", "/api/bili/remove"):
                 fid = str(body.get("id") or body.get("film") or q.get("id", [""])[0] or "").strip()
                 res, err = remove_film(fid)
+                if err:
+                    return self._err(404 if "没有" in err else 400, err)
+                return self._send(200, res)
+            if path == "/api/dm/log/trash":           # 「聊过」页横滑删一部：用户在页面上确认过才来（软删除，进 trash/）
+                res, err = dm_log_trash(body.get("film") or "")
                 if err:
                     return self._err(404 if "没有" in err else 400, err)
                 return self._send(200, res)

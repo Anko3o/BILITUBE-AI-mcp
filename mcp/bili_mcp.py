@@ -23,8 +23,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "server"))
-from bili import BiliClient, pgc_ref, pgc_pick_ep  # noqa: E402
+from bili import BiliClient, pgc_ref, pgc_pick_ep, UPLOADS  # noqa: E402
 import guard  # noqa: E402
+import sweep  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bilitube  # noqa: E402
 bilitube.bind(sys.modules[__name__])
@@ -1199,4 +1200,5 @@ if __name__ == "__main__":
             sys.exit(str(e))
         sys.exit(0)
     log(f"bilitube MCP 服务起在 {HOST}:{PORT}")
+    sweep.start(UPLOADS)                    # 截图 / 封面过期自动清（scene_keep_days，默认 7 天；0 = 不清）
     ThreadingHTTPServer((HOST, PORT), H).serve_forever()

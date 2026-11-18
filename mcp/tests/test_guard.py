@@ -560,7 +560,7 @@ class TestLiveDanmu(Base):
 
     def test_anonymous_get_only(self):
         self.net.on("GET", "/getDanmuInfo", FakeResp(200, self.INFO))
-        d = self.c.live_danmu_info(22920648)
+        d = self.c.live_danmu_info(2)
         self.assertEqual(d["token"], "FAKE-DM-TOKEN")
         self.assertEqual([h["host"] for h in d["hosts"]], ["broadcastlv.chat.bilibili.com"], "只认 *.bilibili.com")
         self.assertEqual(d["buvid"], "b3")

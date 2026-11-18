@@ -8,5 +8,6 @@
   "follow_group_id": null,
   "follow_group_name": "AI 的关注",
   "follow_hourly_budget": 5,
-  "follow_min_gap_s": 60
+  "follow_min_gap_s": 60,
+  "scene_keep_days": 7
 }

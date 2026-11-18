@@ -267,6 +267,24 @@ html[data-theme="dark"] .cv.ph { background-image: linear-gradient(135deg, hsl(v
 .ln.ai .who { font-size: 11px; font-weight: 600; color: var(--muted); margin-right: 6px; }
 .ln .more-lines { font-size: 12px; color: var(--muted); padding-left: 58px; }
 .mo { font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 16px 10px; }
+/* 「聊过」页顶上的找片条：就是逛片页顶栏那条搜索胶囊（.search-bar），放在页面里，不挤顶栏；命中的词用主题色加粗加下划线 */
+.tk-search { margin: 2px 10px 4px; }
+#tkList .tk-cards > .mo:first-child { padding-top: 10px; }
+mark.hl { background: none; color: var(--key); font-weight: 700; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }   /* 没挑主题色时 --key 就是字色，光加粗不够显，补一道下划线 */
+.tk-hits-n { font-size: 11px; color: var(--muted); padding-left: 58px; }
+.tk-all { align-self: flex-start; margin: 6px 0 0 50px; font-size: 12px; }
+/* 「聊过」页横滑删除：用上面「横滑删除」那套 .sw，跟手的是整张卡；外层接过卡片的外边距和圆角，底下的删除垫在圆角里 */
+.tk-sw { margin: 0 10px 10px; border-radius: var(--r-s); }
+.tk-sw > .card { margin: 0; position: relative; touch-action: pan-y; will-change: transform; transition: transform var(--t-base) var(--ease-out), background var(--t-fast) var(--ease-out); }
+.tk-sw.gone > .card { transition: transform .26s var(--ease-out); }
+.sw-x { display: none; }
+/* 桌面（鼠标）：右上角一颗淡淡的小叉，移到卡上才看得见；手机上没有，靠滑 */
+@media (hover: hover) and (pointer: fine) {
+  .sw-x { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-full); background: none; color: var(--muted); opacity: 0; cursor: pointer; transition: opacity var(--t-fast) var(--ease-out); }
+  .tk-sw:hover .sw-x, .sw-x:focus-visible { opacity: .7; }
+  .sw-x:hover { opacity: 1; background: var(--milk); color: var(--ink-soft); }
+  .tk-sw .tk-film .tx { padding-right: 14px; }
+}
 
 /* ── 按压手感（照 eryu）：按下时过渡缩短到 --t-press，松手再按原速回弹 ── */
 button:active, .nav-item:active, .row:active, .tab:active, .vc:active, .post:active, .lv:active {
@@ -342,7 +360,7 @@ html[data-bg="own"] .rows { gap: 6px; padding: 0 8px; }
 html[data-bg="own"] .row, html[data-bg="own"] .sw { border-radius: var(--r-s); }
 html[data-bg="own"] .lv { padding: 8px 10px; }
 html[data-bg="own"] .lv + .lv { margin-top: 6px; }
-html[data-bg="own"] .sw.l .row, html[data-bg="own"] .sw.r .row { background: var(--paper); }   /* 横滑时挡住底下那层删除按钮 */
+html[data-bg="own"] .sw.l .row, html[data-bg="own"] .sw.r .row, html[data-bg="own"] .sw.l > .card, html[data-bg="own"] .sw.r > .card { background: var(--paper); }   /* 横滑时挡住底下那层删除按钮 */
 html[data-bg="own"] .av { background-color: var(--film-2); }   /* 没头像时的圆别显示成实心灰块 */
 html[data-bg="own"] .ts, html[data-bg="own"] .row:active, html[data-bg="own"] .lv:active, html[data-bg="own"] .gi:active { background: var(--film-2); }
 

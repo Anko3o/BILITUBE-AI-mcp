@@ -28,6 +28,7 @@ window.BILITUBE_CONFIG = {
     notes:     "/notes?film={film}",                        // 一部片时间轴上的批注（本页暂未用到）
     talkedList:"/dm/log",                                   // 有私人弹幕记录的片 {films:[{film,title,user,companion,first,last}]}
     talkedFilm:"/dm/log?film={film}",                       // 一部片的私人弹幕 {film,title,count,items:[{t,author:"user"|"companion",text,at}]}，at 是不带 Z 的 UTC
+    dmTrash:   "/dm/log/trash",                         // POST {film}：「聊过」页删一部——这部片下面两个人的私人弹幕挪进回收（软删除，片子不动）
     poster:    "/bili/cover?id={film}",                     // 后端认得的一部片的封面（本页暂未用到：/films 自带 poster 地址）
     pages:     "/bili/pages?id={bvid}",                     // 一个 B 站视频的标题和分 P（后端已不认得的片靠它补片名）
     cover:     "/bili/listcover?bvid={bvid}&u={u}",         // 视频封面的后端代理（coverMode=proxy 时用，direct 时直连没拿到才退回它）
