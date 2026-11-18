@@ -42,7 +42,7 @@ def _s(desc, **extra):
 REF = _s("BV/av 号、ep/ss 号或链接")
 T = _s("秒或 mm:ss")
 LIMIT = {"type": "integer", "description": "条数"}
-FULL = {"type": "boolean", "description": "true＝全的版本：简介不截断，评论带楼中楼和置顶"}
+FULL = {"type": "boolean", "description": "简介不截断，评论带楼中楼和置顶"}
 
 
 def _tool(name, desc, actions, props, required=()):
@@ -67,37 +67,35 @@ TOOLS = [
            "page": {"type": "integer", "description": "第几页（feed 是换一批）"},
            "full": {"type": "boolean", "description": "每条多给 UP 和日期"},
            "mid": {"type": "integer", "description": "following：只看这个 UP（mid）"},
-           "kind": _s("bangumi：anime＝追番（默认），drama＝追剧", enum=["anime", "drama"])}),
+           "kind": _s("bangumi：drama＝追剧，默认追番", enum=["anime", "drama"])}),
     _tool("video",
           "看一条视频，只读，按开销从小到大。info：标题、UP、数据、简介（截断）；comments：最热几条评论；"
           "replies：一条评论下的楼中楼；subtitle：t 前后一小段字幕；danmaku：t 前后的公开弹幕，去重计数。",
           ("info", "comments", "replies", "subtitle", "danmaku"),
           {"ref": REF, "t": T, "limit": LIMIT, "full": FULL,
-           "cover": {"type": "boolean", "description": "info：true 时封面图跟在回话里"},
-           "rpid": {"type": "integer", "description": "replies：哪条评论（comments 回话里的 rpid）"},
-           "sort": _s("comments：hot 最热（默认）/ time 最新", enum=["hot", "time"]),
-           "window": {"type": "number", "description": "subtitle / danmaku：t 前后各几秒"},
-           "page": {"type": "integer", "description": "comments / replies：页码"},
-           "next_offset": _s("comments：上一页回话给的游标"),
-           "film": _s("subtitle：bilitube 里的片子 id（本地片就用它），给了就不用 ref（本地字幕文件优先）")}),
+           "cover": {"type": "boolean", "description": "info：带封面图"},
+           "rpid": {"type": "integer", "description": "replies：评论的 rpid"},
+           "sort": _s("comments：默认 hot", enum=["hot", "time"]),
+           "window": {"type": "number", "description": "t 前后各几秒"},
+           "page": {"type": "integer"}, "next_offset": _s("comments：上一页给的游标"),
+           "film": _s("subtitle：bilitube 里本地片的 id，给了就不用 ref")}),
     _tool("library",
           "用户 B 站账号里的东西，只读。history：最近看过；favorites：收藏夹列表或某个夹子里的视频；"
           "watchlater：用户 B 站账号的稍后再看（bilitube 里唯一的待看单子就是它）；my_replies：用户收到的回复（用户问起再看，不替用户回）；"
           "follows：AI 自己关注的 UP（专属关注分组里的）。",
           ("history", "favorites", "watchlater", "my_replies", "follows"),
           {"limit": LIMIT,
-           "folder_id": {"type": "integer", "description": "favorites：要看的夹子，不给＝列出全部夹子"},
-           "page": {"type": "integer", "description": "favorites：夹子里的页码；follows：页码"}}),
+           "folder_id": {"type": "integer", "description": "favorites：夹子 id，不给＝列夹子"},
+           "page": {"type": "integer"}}),
     _tool("watching",
           "一起看：问用户的 bilitube 播放页现在什么样；会让用户的播放页亮 20 秒「在看这一幕」角标。"
           "where：在放哪部、第几秒、播着没，带这几秒的字幕和弹幕，只回文字；"
           "look：t 前后三帧竖拼成一张图，路径那行原样写进回复用户才看得到，回话写明图从哪来、是哪一刻的。"
           "直播用 film=live:<房间号>。",
           ("where", "look"),
-          {"film": _s("不给＝正在看的那部；直播写 live:<房间号>，聊天推送里带 :<id> 的照抄"),
+          {"film": _s("不给＝正在看的那部"),
            "t": _s("look：秒或 mm:ss，不给＝播放器最近一次上报的进度"),
-           "quality": _s("look：省 / 标准（默认）/ 高清 是三帧图的大小，单帧＝那一秒的一张大图",
-                         enum=["省", "标准", "高清", "单帧"])}),
+           "quality": _s("look：默认标准；单帧＝那一秒一张大图", enum=["省", "标准", "高清", "单帧"])}),
     _tool("stage",
           "会惊动用户：往用户的 bilitube 播放页、聊天和 B 站稍后再看里动手。danmaku：在 t 发一条私人弹幕，只出现在 bilitube 播放页上，"
           "不发去 B 站；也能列出两人的、删自己的。queue：加进用户 B 站账号的稍后再看（会写账号；已在不重复；"
@@ -107,21 +105,20 @@ TOOLS = [
           ("danmaku", "queue", "play_now", "card"),
           {"ref": REF, "film": _s("danmaku：不给＝正在看的那部"), "t": _s("danmaku：发在第几秒，不给＝播放器此刻"),
            "text": _s("danmaku：弹幕内容；card：配文", maxLength=1000),
-           "sub": _s("danmaku：add 发（有 text 时默认）/ list 列出两人的 / del 删自己的一条",
-                     enum=["add", "list", "del"]),
-           "id": _s("danmaku sub=del：要删的那条（sub=list 里有）"),
+           "sub": _s("danmaku：默认 add", enum=["add", "list", "del"]),
+           "id": _s("sub=del：弹幕 id（sub=list 里有）"),
            "queue": {"type": "boolean", "description": "card：true 时同时照 queue 加进 B 站稍后再看"},
-           "mode": _s("danmaku：不给 film 和 t 时当场发，scroll 滚动 / top 顶部", enum=["scroll", "top"]),
-           "color": _s("danmaku：十六进制颜色，同 mode 当场发")}),
+           "mode": _s("danmaku：当场发的样式", enum=["scroll", "top"]),
+           "color": _s("danmaku：十六进制颜色")}),
     _tool("account",
           "会改用户的 B 站账号。like/unlike：点赞、取消；fav/unfav：收藏、移出，by=companion（默认）只进「口袋」"
           "（AI 专用的私密收藏夹），by=user 进用户的夹子、只在用户开口时用；later_add/later_remove：B 站稍后再看加 / 移（同 stage queue）；"
           "follow/unfollow：AI 自己关注 UP，只进专属关注分组，只取关分组里的人（每小时 5 次、间隔 60 秒）。"
           "撞风控整套停、不重试；评论、公开弹幕、投币不开放。",
           ("like", "unlike", "fav", "unfav", "later_add", "later_remove", "follow", "unfollow"),
-          {"ref": REF, "by": _s("companion＝AI 自己收，只进口袋；user＝用户开口让收", enum=["companion", "user"]),
+          {"ref": REF, "by": _s("默认 companion", enum=["companion", "user"]),
            "folder_id": {"type": "integer", "description": "by=user：收进哪个夹子，不给＝默认夹子"},
-           "mid": {"type": "integer", "description": "follow/unfollow：UP 的 mid（video info 里有）；不给就用 ref 那条视频的 UP"}}),
+           "mid": {"type": "integer", "description": "follow/unfollow：UP 的 mid，不给＝ref 那条的 UP"}}),
 ]
 ACTIONS = {t["name"]: t["inputSchema"]["properties"]["action"]["enum"] for t in TOOLS}
 
@@ -204,7 +201,7 @@ def f_search(a):
 
 def f_bangumi(a):
     kind = 2 if str(a.get("kind") or "").lower() == "drama" else 1
-    r = C._check(C.CLIENT.pgc_follow(kind, max(1, _int(a.get("page"), 1)), max(1, min(30, _int(a.get("limit"), 15)))))
+    r = C._check(C.CLIENT.pgc_follow(kind, max(1, _int(a.get("page"), 1)), max(1, min(30, _int(a.get("limit"), 10)))))
     what = "追剧" if kind == 2 else "追番"
     if not r["list"]:
         return f"{what}列表是空的。"

@@ -467,7 +467,7 @@ def t_follows(args):
 
 
 def t_history(args):
-    r = _check(CLIENT.history(int(args.get("n") or 20)))
+    r = _check(CLIENT.history(int(args.get("n") or 10)))
     out = [f"TA 最近看的 {r['count']} 条："]
     for i, h in enumerate(r["list"], 1):
         tag = {"archive": "视频", "pgc": "番剧", "live": "直播", "article": "专栏"}.get(h["type"], h["type"])
@@ -487,7 +487,7 @@ def t_history(args):
 
 
 def t_danmaku(args):
-    r = _check(CLIENT.danmaku(args["id"], args.get("t", 0), float(args.get("window") or 3), int(args.get("limit") or 30)))
+    r = _check(CLIENT.danmaku(args["id"], args.get("t", 0), float(args.get("window") or 3), int(args.get("limit") or 10)))
     head = f"{r['bvid']} 在 {int(r['t'])//60}:{int(r['t'])%60:02d} 前后 {r['window']:g} 秒的弹幕：{r['total_in_window']} 条"
     if not r["lines"]:
         return head + "（这几秒没人说话）"
@@ -532,7 +532,7 @@ def t_watchlater(args):
             raise ToolError("要加/删哪个视频？给 BV 号")
         r = _check(CLIENT.watch_later_set(args["id"], remove=act != "add"))
         return f"{'移出' if r['removed'] else '加进'} B 站稍后再看：av{r['aid']}"
-    r = _check(CLIENT.watch_later(int(args.get("n") or 20)))
+    r = _check(CLIENT.watch_later(int(args.get("n") or 10)))
     if not r["list"]:
         return "B 站稍后再看是空的。"
     return _rows(f"TA 的 B 站稍后再看（{r['count']}/{r.get('total')} 条）：", r["list"])
@@ -540,7 +540,7 @@ def t_watchlater(args):
 
 def t_feed(args):
     kind = str(args.get("kind") or "dynamic").lower()
-    n = int(args.get("limit") or args.get("n") or 12)
+    n = int(args.get("limit") or args.get("n") or 10)
     detail = bool(args.get("detail"))
     if kind == "live":
         r = _check(CLIENT.live_following(n))
@@ -580,7 +580,7 @@ def t_subtitle(args):
 
 
 def t_my_replies(args):
-    r = _check(CLIENT.my_replies(int(args.get("limit") or args.get("n") or 20)))
+    r = _check(CLIENT.my_replies(int(args.get("limit") or args.get("n") or 10)))
     if not r["list"]:
         return "TA 的投稿和评论底下没有新回复。"
     out = [f"{names()['user']}收到的回复（{r['count']} 条）："]
