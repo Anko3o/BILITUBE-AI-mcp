@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+# README「装」那节让人在仓库目录里建的虚拟环境
+venv/

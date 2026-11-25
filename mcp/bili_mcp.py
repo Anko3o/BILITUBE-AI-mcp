@@ -878,6 +878,11 @@ def r_state(q):
     return out
 
 
+# GET /followings?n=&page=   登录账号自己关注的人（只读，按 B 站「最常访问」排），逛片页「关注」页的「关注列表」用
+def r_followings(q):
+    return CLIENT.followings(max(1, min(50, int(q.get("n") or 30))), max(1, int(q.get("page") or 1)))
+
+
 # GET /follow_group?n=&page=   AI 自己关注的 UP（专属关注分组里的，只读）。没配 / 找不到分组也回 200：
 #   group=null、want={id,name}、reason＝一句人话，页面照它写空状态。
 def r_follow_group(q):
@@ -1070,7 +1075,8 @@ REST = {"/video": r_video, "/cid": r_cid, "/playurl": r_playurl,
         "/recommend": r_recommend, "/popular": r_popular, "/subtitle": r_subtitle,
         "/my_replies": r_my_replies, "/progress": r_progress,
         "/pgc/season": r_pgc_season, "/pgc/playurl": r_pgc_playurl, "/pgc/search": r_pgc_search,
-        "/pgc/follow": r_pgc_follow, "/state": r_state, "/follow_group": r_follow_group}
+        "/pgc/follow": r_pgc_follow, "/state": r_state, "/follow_group": r_follow_group,
+        "/followings": r_followings}
 REST_POST = {"/like": w_like, "/fav": w_fav, "/watchlater": w_watchlater, "/heartbeat": w_heartbeat,
              "/logout": w_logout}
 REST_POST_PAUSE_OK = {"/logout"}      # 暂停着也放进来的：退出只清本地，B 站那头自己会看暂停闸

@@ -34,6 +34,7 @@ window.BILITUBE_CONFIG = {
     cover:     "/bili/listcover?bvid={bvid}&u={u}",         // 视频封面的后端代理（coverMode=proxy 时用，direct 时直连没拿到才退回它）
     face:      "/bili/face?mid={mid}&u={u}",                // 用户头像，同样经后端代理
     followGroup:"/bili/follow_group?n=30&page={page}",      // AI 自己关注的 UP（专属关注分组）{group|null, want:{id,name}, list:[{mid,uname,face}]}
+    followings:"/bili/followings?n=30&page={page}",         // 你自己关注的所有人，按 B 站「最常访问」排 {total, has_more, list:[{mid,uname,face,sign}]}（「关注」页的「关注列表」）
     /* ── 会改数据的（POST），只在用户亲手操作时才发 ── */
     remove:    "/remove",                                   // {id}：删一部本地片（连文件一起删）
     laterDel:  "/bili/watchlater",                          // {id, remove:true}：从 B 站「稍后再看」里移除

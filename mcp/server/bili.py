@@ -1207,6 +1207,26 @@ class BiliClient:
         return {"group": g, "total": g["count"], "page": page, "has_more": page * n < g["count"],
                 "count": len(rows), "list": rows}
 
+    def followings(self, n=30, page=1):
+        """登录账号自己关注的人（只读，逛片页「关注」页的「关注列表」用）。按 B 站的「最常访问」排。
+        {"total", "page", "has_more", "count", "list":[{mid, uname, face, sign}]}。不关注、不取关、不改分组。"""
+        if not self.logged_in():
+            return dict(NOT_LOGGED_IN)
+        mid = self.cred.get("mid") or self.cookies.get("DedeUserID")
+        if not mid:
+            return dict(NOT_LOGGED_IN)
+        n, page = max(1, min(int(n), 50)), max(1, min(int(page), 100))
+        d = self._get("/x/relation/followings",
+                      {"vmid": int(mid), "pn": page, "ps": n, "order": "desc", "order_type": "attention"},
+                      need_login=True)
+        if isinstance(d, dict) and "error" in d:
+            return d
+        rows = [{"mid": x.get("mid"), "uname": x.get("uname") or "", "face": _https(x.get("face")),
+                 "sign": _cut_plain(x.get("sign"), 60)} for x in ((d or {}).get("list") or []) if isinstance(x, dict)]
+        total = int((d or {}).get("total") or 0)
+        return {"total": total, "page": page, "has_more": page * n < total and len(rows) > 0,
+                "count": len(rows), "list": rows}
+
     def relation(self, mid):
         """和这个人的关系：{"following": 关注着没, "blocked": 拉黑没, "tags": [所在分组 id]}（只读）。"""
         d = self._get("/x/relation", {"fid": int(mid)}, need_login=True)

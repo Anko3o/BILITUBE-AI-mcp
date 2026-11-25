@@ -35,10 +35,11 @@
   }
   function get(name, vars, extra, opt) {
     opt = opt || {};
-    var fake = function (err) { return { data: D[name] || {}, demo: true, err: err }; };
+    var fake = function (err) { if (err) apiErr = err.message || String(err); return { data: D[name] || {}, demo: true, err: err }; };
     if (DEMO) return Promise.resolve(fake());
     return fetch(apiUrl(name, vars, extra), { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      // 后端出错时回的是 {error: "…"}（比如风控暂停、连不上 MCP），把那句话带出来；回的不是 JSON（反向代理的 404 / 502）才只报状态码
+      if (!r.ok) return r.json().catch(function () { return null; }).then(function (d) { throw new Error((d && d.error) || "HTTP " + r.status); });
       return r.json();
     }).then(function (d) {
       if (d && d.error) throw new Error(d.error);
@@ -120,7 +121,35 @@
     return String(n);
   }
   function filmKey(it) { return it.film || it.id || it.bvid; }
-  function play(it, t) { var k = filmKey(it); if (!k) return toast("这条不是视频"); embedGo(C.playUrl(k, t)); }
+  // 点片之前先挡两种「点了没反应 / 点进去一片白」的情况，当场说清楚：
+  //   · 列表是接口没拿到时垫的示例数据（demo.js，编号 BV1demo…）：这些片子不存在，点过去播放页只会白屏；
+  //   · 播放页地址（config.playUrl，默认 "../?film="）算出来又落回这一页：多半是把 client/browse/ 当成了站点根目录，
+  //     播放页 client/index.html 不在站点里，点了就是原地刷新。
+  var apiErr = null;   // 最近一次接口没拿到的原因（get() 里退回示例数据时记下）
+  function playBlocked(k, u) {
+    if (it_demo(k)) return "这是示例数据，点不开：" + (DEMO ? "地址里带着 ?demo=1" : "接口没拿到" + (apiErr ? "（" + errText(apiErr) + "）" : ""));
+    try {
+      var to = new URL(u, location.href);
+      if (to.origin === location.origin && to.pathname === location.pathname) return "播放页的地址指回了逛片页自己：要把整个 client/ 挂出来（逛片页在 <前缀>/browse/），不能只挂 client/browse/";
+    } catch (e) {}
+    return "";
+  }
+  function errText(m) { return m === "not_logged_in" ? "B 站没登录" : (m || ""); }
+  function it_demo(k) { return /^(bili:)?BV1demo\d+/.test(String(k)); }
+  function play(it, t) {
+    var k = filmKey(it); if (!k) return toast("这条不是视频");
+    var u = C.playUrl(k, t), why = playBlocked(k, u);
+    if (why) return toast(why, null, 8000);
+    leaveNote(); embedGo(u);
+  }
+  // 点进视频之前把这一页记好：列表（推荐 / 热门 / 搜索结果 / 关注页）连同滑到哪儿存进 sessionStorage，
+  // 整页网址（带 #s/关键词 这种）记给播放页的返回按钮。手机 WebView 往往没有往返缓存，返回时这页是重新打开的，靠这几样原样摆回来。
+  function leaveNote() {
+    if (curPage === "rcmd") lcWrite();
+    else if (curPage === "follow") fcWrite();
+    else if (curPage === "ups") upsKeepY();
+    try { if (!EMBED) sessionStorage.setItem("bilitube_ui_back", location.href); } catch (e) {}
+  }
   // 嵌入模式（?embed=1）：点片时在同一个 iframe 里换成播放页（网址补上 embed=1）。走之前把当前页签记进
   // sessionStorage，播放页的返回按钮据此换回来。两边都用 location.replace，不留历史记录，手机返回键不会在 iframe 里一格格往回退。
   var EMBED = document.documentElement.getAttribute("data-embed") === "1";
@@ -130,15 +159,24 @@
     location.replace(u + (u.indexOf("?") < 0 ? "?" : "&") + "embed=1");
   }
   if (EMBED && C.liveUrl) C.openLive = function (room) { embedGo(C.liveUrl(room)); };
+  // 带着 ?film= 落到了逛片页：播放页地址指回了这里（同上，多半是只挂了 client/browse/），开页就说一声
+  if (Q.get("film")) setTimeout(function () { toast("播放页没找到：地址指回了逛片页。要把整个 client/ 挂出来（逛片页在 <前缀>/browse/），不能只挂 client/browse/", null, 10000); }, 0);
   // 提示条（照 eryu 的 toast）；传 act＝{label, fn} 时右边多一颗按钮（比如「撤销」）
   function toast(msg, act, ms) {
     var el = $("toast");
     el.innerHTML = "<span>" + esc(msg) + "</span>" + (act ? '<button type="button" class="toast-act">' + esc(act.label) + "</button>" : "");
     if (act) el.querySelector(".toast-act").onclick = function () { el.hidden = true; act.fn(); };
+    el.classList.toggle("long", String(msg).length > 22);   // 长的（点不开的原因）折行，别在手机上出了屏
     el.hidden = false; el.style.animation = "none"; void el.offsetWidth; el.style.animation = "";
     clearTimeout(toast._t); toast._t = setTimeout(function () { el.hidden = true; }, ms || 2200);
   }
-  function demoTag(r) { return r && r.demo ? '<span class="demo" title="' + esc(r.err ? "接口没拿到：" + r.err.message : "示例数据") + '">示例</span>' : ""; }
+  // 接口没拿到时把原因直接写在标签下面（只写在 title 里没人看得见，列表又长得和真的一样，会被当成「页面正常、点不进去」）
+  function demoTag(r) {
+    if (!r || !r.demo) return "";
+    var why = r.err ? errText(r.err.message) : (DEMO ? "" : errText(apiErr));
+    return '<span class="demo" title="' + esc(why ? "接口没拿到：" + why : "示例数据") + '">示例</span>' +
+      (why ? '<span class="demo-why">接口没拿到，下面是假数据、点不开：' + esc(why) + "</span>" : "");
+  }
   function bindPlay(root, items) {
     root.querySelectorAll("[data-i]").forEach(function (el) {
       if (el.dataset.bound) return;
@@ -291,25 +329,37 @@
       b.onclick = function () { if (R.mode !== b.dataset.mode) { R.mode = b.dataset.mode; R.page = 1; $("body").scrollTop = 0; rcmdRender(); } };
     });
     var u = pg.querySelector('[data-act="unsearch"]');
-    if (u) u.onclick = function () { $("searchIn").value = ""; $("searchX").classList.add("hidden"); R.mode = "rcmd"; rcmdRender(); };
+    if (u) u.onclick = unsearch;
     return R.mode === "live" ? liveRender($("rcmdList")) : rcmdLoad(false);
   }
   // 推荐 / 热门这一批记在 sessionStorage（10 分钟）：点进去看完一返回，这一页原样回来、停在原来滑到的地方，
   // 不用再等一趟 B 站、也不会换一批（封面也都在浏览器缓存里）。下拉刷新照旧换一批。
-  var LC_KEY = "bilitube_list_cache", LC_MS = 600000;
+  // 搜索结果另记一格（按关键词认，一小时）：返回回到同一个词、同一批结果、同一个位置，不再落回推荐、也不再问一趟 B 站。
+  var LC_KEY = "bilitube_list_cache", LC_MS = 600000, SC_KEY = "bilitube_search_cache", SC_MS = 3600000;
   function lcRead(mode) {
     try {
+      if (mode === "search") {
+        var s = JSON.parse(sessionStorage.getItem(SC_KEY) || "null");
+        return s && s.q === R.q && Date.now() - s.at < SC_MS && s.items && s.items.length ? s : null;
+      }
       var c = JSON.parse(sessionStorage.getItem(LC_KEY) || "null");
       if (c && c.mode === mode && Date.now() - c.at < LC_MS && c.items && c.items.length) return c;
     } catch (e) {}
     return null;
   }
   function lcWrite() {
+    if (R.mode === "search") {
+      if (!R.items.length) return;
+      var s = { mode: "search", q: R.q, at: Date.now(), items: R.items.slice(0, 100), page: R.page, more: R.more, y: body.scrollTop };
+      if (Array.isArray(R.pgc)) s.pgc = R.pgc;       // 番剧那一小段也带上；还没拿到就不写，回来再问
+      try { sessionStorage.setItem(SC_KEY, JSON.stringify(s)); } catch (e) {}
+      return;
+    }
     if (R.mode !== "rcmd" && R.mode !== "hot") return;
     try { sessionStorage.setItem(LC_KEY, JSON.stringify({ mode: R.mode, at: Date.now(), items: R.items.slice(0, 60), fresh: R.fresh, page: R.page, more: R.more, y: body.scrollTop })); } catch (e) {}
   }
-  function lcDrop() { try { sessionStorage.removeItem(LC_KEY); } catch (e) {} }
-  window.addEventListener("pagehide", function () { if (curPage === "rcmd") lcWrite(); });
+  function lcDrop() { try { sessionStorage.removeItem(LC_KEY); sessionStorage.removeItem(SC_KEY); } catch (e) {} }
+  window.addEventListener("pagehide", function () { if (curPage === "rcmd") lcWrite(); else if (curPage === "follow") fcWrite(); });
   function rcmdLoad(more, fromCache) {
     var mode = R.mode, hit = !more && fromCache !== false && !DEMO ? lcRead(mode) : null;
     var req = hit ? Promise.resolve({ data: { list: hit.items, has_more: hit.more } })
@@ -323,7 +373,7 @@
       if (!more) R.items = [];
       var start = R.items.length;
       R.items = R.items.concat(list);
-      if (!hit && (mode === "rcmd" || mode === "hot")) { R.more = !(r.data && r.data.has_more === false); if (!r.demo) lcWrite(); }
+      if (!hit) { R.more = !(r.data && r.data.has_more === false); if (!r.demo) lcWrite(); }
       if (hit) setTimeout(function () { if (curPage === "rcmd" && R.mode === mode) body.scrollTop = hit.y || 0; }, 0);
       var box = $("rcmdList");
       if (!R.items.length) { box.innerHTML = '<div class="empty-line">' + (mode === "search" ? "没搜到" : "没拿到，往下拉一下再试") + "</div>"; return; }
@@ -331,7 +381,7 @@
       if (!more) {
         box.innerHTML = (r.demo ? '<div class="demo-row">' + demoTag(r) + "</div>" : "") + (mode === "search" ? '<div id="pgcHits"></div>' : "") +
           '<div class="grid2" id="rcmdGrid">' + R.items.map(function (it, i) { return cardHTML(it, i); }).join("") + "</div>" + (canMore ? moreBtn() : "");
-        if (mode === "search" && !r.demo) pgcHits(R.q);
+        if (mode === "search" && !r.demo) pgcHits(R.q, hit ? hit.pgc : undefined);
       } else {
         $("rcmdGrid").insertAdjacentHTML("beforeend", list.map(function (it, k) { return cardHTML(it, start + k, k); }).join(""));
         if (!canMore) { var mr = box.querySelector(".more-row"); if (mr) mr.remove(); }
@@ -346,24 +396,60 @@
     return [esc([it.type_name, it.index_show || (it.eps ? it.eps + " 集" : "")].filter(Boolean).join(" · ")),
       esc(it.progress || it.badge || it.areas || "")];
   }
-  function pgcHits(q) {
-    get("pgcsearch", { q: q }, null, { noFake: true }).then(function (r) {
+  function pgcHits(q, cached) {
+    var req = Array.isArray(cached) ? Promise.resolve({ data: { bangumi: cached } }) : get("pgcsearch", { q: q }, null, { noFake: true });
+    req.then(function (r) {
       var el = $("pgcHits"); if (!el || R.mode !== "search" || R.q !== q) return;
       var d = r.data || {}, list = (d.bangumi || []).concat(d.ft || []);
+      if (r.data && !Array.isArray(cached)) { R.pgc = list; lcWrite(); }
       if (!list.length) return;
       el.innerHTML = '<div class="sec"><span>番剧 · 影视</span></div><div class="blk flush"><div class="rows">' +
         list.map(function (it, i) { return rowHTML(it, i, pgcLines(it), ""); }).join("") + '</div></div><div class="sec"><span>视频</span></div>';
       bindPlay(el, list);
     });
   }
-  // 搜索：左边的放大镜就是提交按钮，回车也行
+  // 搜索：左边的放大镜就是提交按钮，回车也行。
+  // 搜的词写进网址（#s/关键词），点进视频再返回、或者刷新，都还是这次搜索。
+  // 从推荐页第一次搜会压一格历史（系统返回＝回推荐）；在结果页里再搜就地替换，不一格格叠；嵌入模式一律不压。
   $("searchForm").onsubmit = function (e) {
     e.preventDefault();
     var q = $("searchIn").value.trim(); if (!q) { $("searchIn").focus(); return; }
-    $("searchIn").blur(); R.mode = "search"; R.q = q; R.page = 1; go("rcmd"); rcmdRender();
+    $("searchIn").blur(); searchGo(q);
   };
+  function searchGo(q) {
+    q = q.slice(0, 80);
+    var h = "s/" + encodeURIComponent(q);
+    if (location.hash === "#" + h) {           // 同一个词再按一次＝重新搜
+      try { sessionStorage.removeItem(SC_KEY); } catch (e) {}
+      R.mode = "search"; R.q = q; R.page = 1; R.pgc = undefined; body.scrollTop = 0; rcmdRender(); return;
+    }
+    if (EMBED || R.mode === "search") location.replace("#" + h);
+    else { location.hash = h; try { history.replaceState({ bt: "s" }, "", location.href); } catch (e) {} }
+  }
+  // 收起搜索：这一格是从推荐页压进来的就退回去，不然就地换回推荐
+  function unsearch() {
+    $("searchIn").value = ""; $("searchX").classList.add("hidden");
+    if (history.state && history.state.bt === "s" && !EMBED) history.back();
+    else location.replace("#rcmd");
+  }
+  // 网址里的搜索词 → R（show() 每次切页先过这里）。返回 true＝推荐页要重画
+  function searchFromHash(p, arg) {
+    var q = "";
+    if (p === "s") { try { q = decodeURIComponent(arg || ""); } catch (e) { q = arg || ""; } q = q.trim().slice(0, 80); }
+    if (q) {
+      if (R.mode === "search" && R.q === q) return false;
+      R.mode = "search"; R.q = q; R.page = 1; R.pgc = undefined;
+      $("searchIn").value = q; $("searchX").classList.remove("hidden");
+      return true;
+    }
+    if (R.mode === "search" && (p === "rcmd" || p === "s" || (!PAGES[p] && !SUBS[p]))) {
+      R.mode = "rcmd"; R.page = 1; $("searchIn").value = ""; $("searchX").classList.add("hidden");
+      return true;
+    }
+    return false;
+  }
   $("searchIn").oninput = function () { $("searchX").classList.toggle("hidden", !$("searchIn").value); };
-  $("searchX").onclick = function () { $("searchIn").value = ""; $("searchX").classList.add("hidden"); if (R.mode === "search") { R.mode = "rcmd"; rcmdRender(); } else $("searchIn").focus(); };
+  $("searchX").onclick = function () { if (R.mode === "search") unsearch(); else { $("searchIn").value = ""; $("searchX").classList.add("hidden"); $("searchIn").focus(); } };
 
   // ══ 直播（推荐页第三个标签）：输房间号进直播间＋关注的人谁在播。进直播间走 config.openLive（播放页 ?film=live:<房间号>） ══
   function faceUrl(u) { return u.face && u.mid ? apiUrl("face", { mid: u.mid, u: u.face }) : ""; }
@@ -395,7 +481,7 @@
   }
 
   // ══ 关注（参照 B 站 App 的「关注」：一排 UP 主名字，正在直播的摘要，下面是一条条投稿动态） ══
-  var F = { host: null, hostName: null, ups: [], all: [] };
+  var F = { host: null, hostName: null, ups: [], all: [], items: [], offset: "", more: false, loaded: false };
   function followRender() {
     var pg = $("pg-follow");
     pg.innerHTML = '<div class="tabs" id="upBox"></div><div id="liveBox"></div><div id="feedBox">' + '<div class="post"><div class="sk" style="height:180px"></div></div>' + "</div>";
@@ -411,13 +497,34 @@
     });
     return followLoad();
   }
-  function followLoad() {
-    var host = F.host;
-    var req = host && !DEMO ? get("dynamic", { page: 1 }, { host_mid: host }) : get("dynamic", { page: 1 });
+  // 关注页也记进会话（只看哪位、翻到第几批、滑到哪儿，十分钟），点进视频再返回原样摆回来；底下「再来一些」接着往下翻（B 站给的游标）。
+  var FC_KEY = "bilitube_follow_cache", FC_MS = 600000;
+  function fcRead() {
+    try { var c = JSON.parse(sessionStorage.getItem(FC_KEY) || "null"); return c && Date.now() - c.at < FC_MS && c.items && c.items.length ? c : null; } catch (e) { return null; }
+  }
+  function fcWrite() {
+    if (!F.items || !F.items.length || F.demo) return;
+    try { sessionStorage.setItem(FC_KEY, JSON.stringify({ at: Date.now(), host: F.host, hostName: F.hostName, ups: F.ups, items: F.items.slice(0, 120), offset: F.offset, more: F.more, y: body.scrollTop })); } catch (e) {}
+  }
+  function fcDrop() { try { sessionStorage.removeItem(FC_KEY); } catch (e) {} }
+  function postHTML(it, i, k) {
+    var left = (it.duration ? "<span>" + esc(fmtDur(it.duration)) + "</span>" : "") + (fmtPlay(it.play) ? "<span>" + esc(fmtPlay(it.play)) + "播放</span>" : "");
+    return '<div class="post stagger-in" data-i="' + i + '" role="button" tabindex="0"' + sg(k == null ? i : k) + '><div class="who">' + esc(upName(it.up)) + '</div><div class="when">' + esc(it.pubdate || "") + " · 投稿了视频</div>" +
+      cvHTML(it, left, "") + '<div class="t">' + esc(it.title) + "</div></div>";
+  }
+  function followLoad(more) {
+    var c = !more && !DEMO && !F.loaded ? fcRead() : null;      // 这页刚开（比如从视频返回来）：会话里有就照原样摆
+    if (c && F.host == null) { F.host = c.host; F.hostName = c.hostName; }
+    var hit = c && String(c.host || "") === String(F.host || "") ? c : null;
+    F.loaded = true;
+    var host = F.host, extra = host && !DEMO ? { host_mid: host } : {};
+    if (more && F.offset) extra.offset = F.offset;
+    var req = hit ? Promise.resolve({ data: { list: hit.items, offset: hit.offset, has_more: hit.more } }) : get("dynamic", { page: 1 }, extra);
     return req.then(function (r) {
       if (host !== F.host) return;
       var list = (r.data && r.data.list) || [];
-      if (!host) {
+      if (hit) F.ups = hit.ups || [];
+      else if (!host && !more) {
         F.all = list;
         var seen = {}, ups = [];
         list.forEach(function (it) {
@@ -425,25 +532,91 @@
           if (!seen[k]) { seen[k] = { mid: it.up_mid, name: it.up }; ups.push(seen[k]); }
         });
         F.ups = ups;
-      } else if (DEMO || r.demo) {
+      } else if (!more && (DEMO || r.demo)) {
         list = F.all.filter(function (it) { return String(it.up_mid) === String(host); });
       }
-      // 从 AI 主页的「关注」点进来的那位，最近没投稿时上面那排没有 TA：补在最前面
-      if (host && F.hostName && !F.ups.some(function (u) { return String(u.mid) === String(host); })) F.ups.unshift({ mid: host, name: F.hostName });
-      $("upBox").innerHTML = '<button class="tab' + (!host ? " on" : "") + '" type="button" data-mid="">全部</button>' +
-        F.ups.map(function (u) {
-          return '<button class="tab' + (String(host) === String(u.mid) ? " on" : "") + '" type="button" data-mid="' + esc(u.mid) + '">' + esc(upName(u.name)) + "</button>";
-        }).join("");
-      $("upBox").querySelectorAll("[data-mid]").forEach(function (b) {
-        b.onclick = function () { var m = b.dataset.mid || null; if (String(m) === String(F.host)) return; F.host = m; followLoad(); };
-      });
-      $("feedBox").innerHTML = (r.demo ? '<div class="demo-row">' + demoTag(r) + "</div>" : "") + (list.length ? list.map(function (it, i) {
-        var left = (it.duration ? "<span>" + esc(fmtDur(it.duration)) + "</span>" : "") + (fmtPlay(it.play) ? "<span>" + esc(fmtPlay(it.play)) + "播放</span>" : "");
-        return '<div class="post stagger-in" data-i="' + i + '" role="button" tabindex="0"' + sg(i) + '><div class="who">' + esc(upName(it.up)) + '</div><div class="when">' + esc(it.pubdate || "") + " · 投稿了视频</div>" +
-          cvHTML(it, left, "") + '<div class="t">' + esc(it.title) + "</div></div>";
-      }).join("") : '<div class="empty-line">没有新投稿</div>');
-      bindPlay($("feedBox"), list);
+      F.demo = !!r.demo;
+      F.offset = (r.data && r.data.offset) || "";
+      F.more = !r.demo && !!(r.data && r.data.has_more) && !!F.offset;
+      var start = more ? F.items.length : 0;
+      F.items = more ? F.items.concat(list) : list;
+      if (!more) {
+        // 从 AI 主页的「关注」点进来的那位，最近没投稿时上面那排没有 TA：补在最前面
+        if (host && F.hostName && !F.ups.some(function (u) { return String(u.mid) === String(host); })) F.ups.unshift({ mid: host, name: F.hostName });
+        $("upBox").innerHTML = '<button class="tab' + (!host ? " on" : "") + '" type="button" data-mid="">全部</button>' +
+          (DEMO ? "" : '<button class="tab icon" type="button" data-ups aria-label="关注列表：我关注的所有人">关注列表' + I("right", 13, 1.8) + "</button>") +
+          F.ups.map(function (u) {
+            return '<button class="tab' + (String(host) === String(u.mid) ? " on" : "") + '" type="button" data-mid="' + esc(u.mid) + '">' + esc(upName(u.name)) + "</button>";
+          }).join("");
+        $("upBox").querySelectorAll("[data-mid]").forEach(function (b) {
+          b.onclick = function () { var m = b.dataset.mid || null; if (String(m) === String(F.host)) return; F.host = m; F.hostName = m ? b.textContent : null; body.scrollTop = 0; followLoad(); };
+        });
+        var ub = $("upBox").querySelector("[data-ups]");
+        if (ub) ub.onclick = function () { fcWrite(); go("ups"); };
+        $("feedBox").innerHTML = (r.demo ? '<div class="demo-row">' + demoTag(r) + "</div>" : "") +
+          (list.length ? '<div id="feedList">' + list.map(function (it, i) { return postHTML(it, i); }).join("") + "</div>" : '<div class="empty-line">没有新投稿</div>');
+      } else if (list.length) {
+        $("feedList").insertAdjacentHTML("beforeend", list.map(function (it, k) { return postHTML(it, start + k, k); }).join(""));
+      }
+      var box = $("feedBox"), mr = box.querySelector(".more-row");
+      if (mr) mr.remove();
+      if (F.more && F.items.length) {
+        box.insertAdjacentHTML("beforeend", moreBtn());
+        var m = box.querySelector("[data-more]");
+        m.onclick = function () { m.disabled = true; followLoad(true); };
+      }
+      bindPlay(box, F.items);
+      if (hit) setTimeout(function () { if (curPage === "follow") body.scrollTop = hit.y || 0; }, 0);
+      else if (!r.demo) fcWrite();
     });
+  }
+
+  // ══ 关注列表：你的 B 站账号关注的所有人，按 B 站「最常访问」排。只读——这里没有关注 / 取关的按钮。
+  //    点一个人 → 回「关注」页只看 TA 的投稿。一页 30 个，底下「再来一些」；会话里记半小时（返回不重拉）。 ══
+  var UPS_KEY = "bilitube_ups_cache", UPS_MS = 1800000, UP = null;
+  function upsKeepY() { if (UP) { UP.y = body.scrollTop; try { sessionStorage.setItem(UPS_KEY, JSON.stringify(UP)); } catch (e) {} } }
+  function upsRender() {
+    var pg = $("pg-sub");
+    if (!UP) { try { var c = JSON.parse(sessionStorage.getItem(UPS_KEY) || "null"); if (c && Date.now() - c.at < UPS_MS && c.list && c.list.length) UP = c; } catch (e) {} }
+    pg.innerHTML = '<div class="blk lv-list" id="upsList"><div class="sk" style="height:40px"></div></div>';
+    if (UP) { upsDraw(true); return; }
+    UP = { at: Date.now(), list: [], page: 0, more: true, total: 0, y: 0 };
+    return upsLoad();
+  }
+  function upsLoad() {
+    var page = UP.page + 1;
+    return get("followings", { page: page }, null, { noFake: true }).then(function (r) {
+      if (curPage !== "ups") return;
+      var d = r.data;
+      if (!d) {
+        var box = $("upsList"); if (UP.list.length) { toast("没拿到"); upsDraw(); return; }
+        UP = null;
+        box.innerHTML = '<div class="empty-line" style="padding:6px 0">' + (ME && !ME.logged_in && !ME._err ? "B 站没登录，看不到" : "关注列表没拿到" + (r.err && /404|没有这条路/.test(r.err.message) ? "（后端还是旧版本，重启一下后端）" : "，往下拉一下再试")) + "</div>";
+        return;
+      }
+      UP.list = UP.list.concat(d.list || []); UP.page = page; UP.more = !!d.has_more; UP.total = d.total || UP.list.length; UP.at = Date.now();
+      try { sessionStorage.setItem(UPS_KEY, JSON.stringify(UP)); } catch (e) {}
+      upsDraw();
+    });
+  }
+  function upsDraw(restore) {
+    var box = $("upsList"); if (!box) return;
+    if (!UP.list.length) { box.innerHTML = '<div class="empty-line" style="padding:6px 0">还没关注谁</div>'; return; }
+    box.innerHTML = '<div class="ups-n">' + esc(UP.total) + " 位 · 按最常访问排</div>" + UP.list.map(function (u, i) {
+      var f = faceUrl(u);
+      return '<div class="lv" role="button" tabindex="0" data-k="' + i + '">' +
+        '<span class="av' + (f ? "" : " ph") + '"' + (f ? " style=\"background-image:url('" + esc(f) + "')\"" : "") + ">" + (f ? "" : I("user", 20, 1.5)) + "</span>" +
+        '<span class="tx"><b>' + esc(u.uname) + "</b><span>" + esc(u.sign || "") + "</span></span>" + I("right", 15, 1.75) + "</div>";
+    }).join("") + (UP.more ? moreBtn() : "");
+    box.querySelectorAll("[data-k]").forEach(function (b) {
+      b.onclick = function () {
+        var u = UP.list[+b.dataset.k]; upsKeepY();
+        F.host = String(u.mid); F.hostName = u.uname; F.loaded = true; delete drawn.follow; go("follow");
+      };
+    });
+    var m = box.querySelector("[data-more]");
+    if (m) m.onclick = function () { m.disabled = true; upsLoad(); };
+    if (restore && UP.y) setTimeout(function () { if (curPage === "ups") body.scrollTop = UP.y; }, 0);
   }
 
   // ══ 聊过：GET /dm/log 列出有私人弹幕的片 → 逐部取 /dm/log?film=；封面和 UP 主从后端认得的片子（/films）取 ══
@@ -1236,7 +1409,8 @@
   // 退出以后上一个号的东西一样不留：账号信息、收藏夹、推荐那一批（连 sessionStorage 里那份）、关注页；各页下次进来重新拉，眼前这页当场重画
   function afterLogout() {
     meP = null; ME = null; PK = null; lcDrop();
-    R.items = []; F.host = null; F.hostName = null; F.ups = []; F.all = [];
+    R.items = []; F.host = null; F.hostName = null; F.ups = []; F.all = []; F.items = []; F.loaded = true; fcDrop();
+    UP = null; try { sessionStorage.removeItem(UPS_KEY); } catch (e) {}
     Object.keys(drawn).forEach(function (k) { delete drawn[k]; });
     refreshBiliRow();
     if (SUBS[curPage]) show(location.hash.slice(1), true);
@@ -1296,7 +1470,11 @@
   }
   function refreshCur() {
     var p = curPage;
-    if (SUBS[p]) { if (p === "companion") TK = null; if (p === "companion" || p === "fav") PK = null; return show(location.hash.slice(1), true); }
+    if (SUBS[p]) {
+      if (p === "companion") TK = null; if (p === "companion" || p === "fav") PK = null;
+      if (p === "ups") { UP = null; try { sessionStorage.removeItem(UPS_KEY); } catch (e) {} }
+      return show(location.hash.slice(1), true);
+    }
     drawn[p] = 1;
     if (p === "rcmd") { if (R.mode === "rcmd") R.fresh++; R.page = 1; lcDrop(); return rcmdRender(); }
     if (p === "talked") TK = null;
@@ -1339,8 +1517,8 @@
   var drawn = {};
   var PAGES = { rcmd: rcmdRender, follow: followRender, talked: talkedRender, me: meRender };
   var SUBS = { hist: [histRender, "历史记录"], fav: [favRender, "收藏夹"], folder: [folderRender, "收藏夹"], later: [laterRender, "稍后再看"], films: [filmsRender, "本地片"], pgc: [pgcRender, "追番"],
-    companion: [companionRender, function () { return aiName() + "的主页"; }] };
-  var parentOf = { folder: "fav" };   // 二级页的返回按钮回哪：默认回「我的」；单个收藏夹页回打开它的那页（收藏夹 / AI 的主页）
+    companion: [companionRender, function () { return aiName() + "的主页"; }], ups: [upsRender, "关注列表"] };
+  var parentOf = { folder: "fav", ups: "follow" };   // 二级页的返回按钮回哪：默认回「我的」；单个收藏夹页回打开它的那页（收藏夹 / AI 的主页）；关注列表回「关注」
   var TITLES = { rcmd: "", follow: "关注", talked: "一起聊过的片", me: "" };
   var scrolls = {};
   var curPage = null;
@@ -1352,16 +1530,19 @@
   function enter() { body.classList.remove("tab-enter"); void body.offsetWidth; body.classList.add("tab-enter"); }
   function show(h, quiet) {
     var parts = String(h || "").split("/"), p = parts[0], arg = parts.slice(1).join("/");
+    if (curPage && !SUBS[curPage]) scrolls[curPage] = body.scrollTop;
+    if (curPage === "ups" && p !== "ups") upsKeepY();
+    if (searchFromHash(p, arg)) { delete drawn.rcmd; scrolls.rcmd = 0; }   // #s/关键词
+    if (p === "s") { p = "rcmd"; arg = ""; }
     var sub = SUBS[p];
     if (!sub && !PAGES[p]) p = "rcmd";
-    if (curPage && !SUBS[curPage]) scrolls[curPage] = body.scrollTop;
     flushPending();
     var changed = curPage !== p;
     curPage = p;
     document.body.dataset.page = p;
     var shown = sub ? "sub" : p;
     document.querySelectorAll(".page").forEach(function (s) { s.hidden = s.dataset.page !== shown; s.style.transform = ""; });
-    document.querySelectorAll(".nav-item").forEach(function (b) { b.classList.toggle("active", b.dataset.go === (sub ? "me" : p)); });
+    document.querySelectorAll(".nav-item").forEach(function (b) { b.classList.toggle("active", b.dataset.go === (sub ? (p === "ups" ? "follow" : "me") : p)); });
     $("searchForm").hidden = p !== "rcmd";
     $("topTitle").textContent = sub ? (typeof sub[1] === "function" ? sub[1]() : sub[1]) : TITLES[p] || "";
     var hb = $("homeBtn");
@@ -1387,7 +1568,7 @@
   $("nav").addEventListener("click", function (e) {
     var b = e.target.closest(".nav-item"); if (!b) return;
     if (b.dataset.go === curPage) { body.scrollTo({ top: 0, behavior: "smooth" }); return; }
-    go(b.dataset.go);
+    go(b.dataset.go === "rcmd" && R.mode === "search" ? "s/" + encodeURIComponent(R.q) : b.dataset.go);   // 推荐页上开着搜索：回到那个搜索
   });
   window.addEventListener("hashchange", function () { show(location.hash.slice(1)); });
   document.addEventListener("keydown", function (e) {

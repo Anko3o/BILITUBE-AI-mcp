@@ -123,6 +123,8 @@ button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-vis
 .empty-line { padding: 18px 16px; color: var(--muted); font-size: 12.5px; letter-spacing: .02em; }
 .demo { font-size: 10.5px; font-weight: 600; color: var(--muted); background: var(--milk); border-radius: var(--r-full); padding: 2px 8px; }
 .demo-row { padding: 0 16px 8px; }
+.ups-n { font-size: 12px; color: var(--muted); padding: 2px 0 6px; }   /* 关注列表顶上「N 位 · 按最常访问排」 */
+.demo-why { display: block; margin-top: 4px; font-size: 11.5px; line-height: 1.5; color: var(--muted); word-break: break-word; }
 
 /* 标签：未选中只有灰字，选中为实底（推荐/热门/直播、关注里的人、追番/追剧） */
 .tabs { display: flex; align-items: center; gap: 4px; padding: 0 12px 8px; overflow-x: auto; scrollbar-width: none; }
@@ -298,6 +300,7 @@ button:active, .nav-item:active, .row:active, .tab:active, .vc:active, .post:act
   background: rgb(var(--pop-rgb)); color: var(--on-pop); font-size: 12.5px; padding: 8px 16px; border-radius: var(--r-full);
   white-space: nowrap; animation: fadeUp var(--t-fast) var(--ease-out);   /* 照 eryu .toast 的 fadeUp，补上 translateX(-50%) */
 }
+.toast.long { white-space: normal; width: max-content; max-width: calc(100vw - 32px); border-radius: 14px; line-height: 1.55; }
 @keyframes fadeUp {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }

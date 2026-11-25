@@ -36,7 +36,8 @@
   if (d.dataset.embed !== "1") {
     try { var r = new URL(document.referrer); if (r.origin === location.origin && r.pathname.indexOf(location.pathname.replace(/[^\/]*$/, "") + "browse/") === 0) ref = r.href; } catch (e) {}
   }
-  try { if (ref) sessionStorage.setItem("bilitube_ui_back", ref); } catch (e) {}
+  // 逛片页点进来之前自己记过一份带 #（比如 #s/关键词）的整页网址：路径对得上就留着它，不拿不带 # 的 referrer 盖掉
+  try { if (ref) { var oldBack = sessionStorage.getItem("bilitube_ui_back") || ""; if (oldBack.split("#")[0] !== ref.split("#")[0]) sessionStorage.setItem("bilitube_ui_back", ref); } } catch (e) {}
   var t = null;
   try { t = localStorage.getItem("bilitube_theme"); } catch (e) {}
   if (t !== "dark" && t !== "light") t = (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
@@ -240,6 +241,13 @@ video { display: block; width: 100%; max-height: 62vh; background: var(--screen)
   opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 950;
 }
 .toast[data-on="1"] { opacity: 1; }
+/* 开页那一趟没接上：原因钉在页面上（不然 toast 一闪，剩一张白页，看着像「点不进去」） */
+.open-fail { margin: 76px 16px 0; padding: 16px 18px; border-radius: 14px; background: var(--paper, #fff); color: var(--ink, #111);
+  font: 14px/1.7 var(--font-ui, sans-serif); word-break: break-word; }
+.open-fail b { display: block; font-size: 15px; margin-bottom: 6px; }
+.open-fail p { margin: 6px 0 0; color: var(--ink-soft, #4a4a4a); }
+.open-fail code { font-size: 12.5px; padding: 1px 5px; border-radius: 6px; background: var(--milk, #f5f5f5); }
+.open-fail a { color: inherit; }
 
 /* ── 续播：「上次看到 x:xx，续播？」一行小字＋两个字按钮 ── */
 .resume { display: none; align-items: center; }
@@ -574,6 +582,7 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
 </head>
 <body>
 <div class="wrap">
+  <div class="open-fail" id="openFail" role="alert" hidden></div>
   <!-- 点播。顶栏、标题下那行小字、「我们的弹幕」「简介」和抽屉由脚本「界面」那段（bInit）搭起来 -->
   <section id="player" hidden>
     <h1 id="title"></h1>
@@ -714,6 +723,44 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
     }).then(function (r) { return r.json(); });
+  }
+  // 开页那一趟（/bili/add、/films）专用：回信不是 JSON（静态服务器的 404 页、反向代理的空 502）时带上 HTTP 状态，
+  // 好分清是「后端回了一句错话」还是「根本没到后端」。
+  function openReq(path, body) {
+    var o = body === undefined ? { credentials: "same-origin" } : {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    };
+    return fetch(API + path, o).then(function (r) {
+      return r.json().catch(function () { var e = new Error("HTTP " + r.status); e.status = r.status; e.notJson = true; throw e; });
+    });
+  }
+  // 片子没开成：把原因钉在页面上，带一颗回逛片页的链接。e 是 openReq 抛出来的（没到后端），msg 是后端回的话。
+  function openFail(path, e, msg) {
+    var box = $("openFail");
+    if (!box) return toast(msg || "没接上");
+    box.textContent = "";
+    var add = function (tag, parts) {
+      var el = document.createElement(tag);
+      parts.forEach(function (x) {
+        if (typeof x === "string") el.appendChild(document.createTextNode(x));
+        else { var c = document.createElement("code"); c.textContent = x[0]; el.appendChild(c); }
+      });
+      box.appendChild(el); return el;
+    };
+    if (e) {
+      add("b", ["打不开：后端接口没接上"]);
+      add("p", ["页面向 ", [API + path], " 要片子，回来的" + (e.notJson ? "是 " + e.message + "，不是后端的回信。" : "是网络错误（" + (e.message || e) + "）。")]);
+      add("p", ["多半是反向代理没把 ", [BASE + "api/"], " 转给后端（", ["server/bilitube_server.py"], "），或者后端、",
+        ["mcp/bili_mcp.py"], " 没在跑。照 README「网页怎么接」对一下；在浏览器里直接打开 ", [BASE + "api/bili/me"], " 应该看到一行 JSON。"]);
+    } else {
+      add("b", ["打不开这部"]);
+      add("p", [msg || "后端没说原因"]);
+    }
+    var back = add("p", []), a = document.createElement("a");
+    a.href = "browse/"; a.textContent = "回逛片页"; back.appendChild(a);
+    box.hidden = false;
+    tellSize();
   }
 
   // ── 播放 ──
@@ -3218,7 +3265,7 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     });
     bTheme(document.documentElement.dataset.uiTheme, true);
     bNames();
-    setTimeout(function () { if (!cur && !live) bEmptyShow("这部片子没打开"); }, 12000);
+    setTimeout(function () { if (!cur && !live && $("openFail").hidden) bEmptyShow("这部片子没打开"); }, 12000);   // 已经钉了原因卡就不再叠一句
   }
 
   function bTheme(t, quiet) {
@@ -3233,15 +3280,25 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     if (EMBED) {                                    // 嵌入：换回 browse/ 刚才那一页（它跳过来之前把页名记在会话里）；用 replace，返回键不在 iframe 里一格格倒
       var h = "";
       try { h = sessionStorage.getItem("bilitube_embed_back") || ""; } catch (e) {}
-      location.replace("browse/?embed=1" + (/^[\w\/-]{1,60}$/.test(h) ? "#" + h : ""));
+      location.replace("browse/?embed=1" + (/^[\w\/%.~-]{1,400}$/.test(h) ? "#" + h : ""));   // #s/关键词 编码后带 %
       return;
     }
-    var ref = "", fromBrowse = false;
+    var ref = "", fromBrowse = false, home = location.origin + location.pathname.replace(/[^\/]*$/, "") + "browse/";
     try { ref = sessionStorage.getItem("bilitube_ui_back") || ""; } catch (e) {}
     try { var r = new URL(document.referrer); fromBrowse = r.origin === location.origin && r.pathname.indexOf(location.pathname.replace(/[^\/]*$/, "") + "browse/") === 0; } catch (e) {}
+    if (ref.indexOf(home) !== 0) ref = "";         // 只回本站的逛片页
     if (fromBrowse && history.length > 1) {
-      history.back();                               // 回到 browse/ 刚才那一页（它自己记着翻到哪儿）
-      setTimeout(function () { location.href = ref || "browse/"; }, 700);   // 没退出去（比如前一格还是这页）就直接去
+      // 回到 browse/ 刚才那一页（它照会话里记的把搜索词、结果、滑到哪儿摆回来）。
+      // 只在页面真的没走（没有 beforeunload / pagehide）2.5 秒后才兜底，用 replace 不压历史——
+      // 原来 0.7 秒后不管退没退出去都再跳一次，手机上开页慢一点，就把正在进行的返回截成「新开一张不带 # 的逛片页」，
+      // 落回推荐页，历史里还多压一格，再按返回又回到视频从头放。
+      var gone = false, mark = function () { gone = true; };
+      window.addEventListener("beforeunload", mark); window.addEventListener("pagehide", mark);
+      history.back();
+      setTimeout(function () {
+        window.removeEventListener("beforeunload", mark); window.removeEventListener("pagehide", mark);
+        if (!gone && document.visibilityState === "visible") location.replace(ref || "browse/");
+      }, 2500);
       return;
     }
     location.href = ref || "browse/";
@@ -3547,20 +3604,20 @@ html[data-embed][data-ui="b"][data-skin-from="host"] {
     var m = /^bili:(BV[0-9A-Za-z]{10})(?:_p(\d{1,4}))?$/.exec(want);
     var mg = /^bili:((?:ep|ss|md)\d{1,12})$/.exec(want);     // 番剧 / 影视：ss / md＝进账号上次看到的那一集
     if (m || mg) {
-      post("/bili/add", { ref: mg ? mg[1] : m[1] + (m[2] && m[2] !== "1" ? "?p=" + m[2] : ""), direct: 1 }).then(function (r) {
+      openReq("/bili/add", { ref: mg ? mg[1] : m[1] + (m[2] && m[2] !== "1" ? "?p=" + m[2] : ""), direct: 1 }).then(function (r) {
         if (r && r.ok && r.film) {
           if (r.direct && r.direct.ok) directPre[r.film.id] = { d: r.direct, at: Date.now() };
           open(r.film, { play: qPlay, t: qT }); dropQFilm();
-        } else toast((r && r.error) || "没接上");
-      }).catch(function () { toast("没接上"); });
+        } else openFail("/bili/add", null, (r && r.error) || "没接上");
+      }).catch(function (e) { openFail("/bili/add", e); });
     } else {
-      get("/films").then(function (d) {
+      openReq("/films").then(function (d) {
         films = d.films || [];
         var hit = null;
         films.forEach(function (f) { if (f.id === want) hit = f; });
         if (hit) { open(hit, { play: qPlay, t: qT }); dropQFilm(); return; }
-        if (qFilm) toast("找不到这部片子");
-      }).catch(function () { toast("片子信息没拉下来"); });
+        if (qFilm) openFail("/films", null, "找不到这部片子（" + want + "）");
+      }).catch(function (e) { openFail("/films", e); });
     }
   }
 })();

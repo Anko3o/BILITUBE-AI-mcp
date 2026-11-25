@@ -3519,6 +3519,10 @@ class Handler(BaseHTTPRequestHandler):
                 if off:
                     u += f"&offset={quote(off)}"
                 return self._send(200, bili_get(u))
+            if path == "/api/bili/followings":     # 「关注」页的「关注列表」：你自己关注的人（只读）
+                n = max(1, min(50, int(float(q.get("n", ["30"])[0] or 30))))
+                page = max(1, min(100, int(float(q.get("page", ["1"])[0] or 1))))
+                return self._send(200, bili_get(f"/followings?n={n}&page={page}"))
             if path == "/api/bili/live":
                 n = max(1, min(30, int(float(q.get("n", ["20"])[0] or 20))))
                 return self._send(200, bili_get(f"/live_following?n={n}"))

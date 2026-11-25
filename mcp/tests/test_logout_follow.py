@@ -369,3 +369,28 @@ class TestFollowList(F):
         self.assertTrue(by["account"]["description"].startswith("会改用户的 B 站账号"))
         self.assertIn("mid", by["account"]["inputSchema"]["properties"])
         self.assertEqual(by["account"]["inputSchema"]["required"], ["action"], "follow 用 mid，不再强制 ref")
+
+
+# ── 自己关注的人（逛片页「关注列表」，只读） ─────────────────────
+
+class TestFollowings(T):
+    def test_lists_own_followings_read_only(self):
+        self.net.on("GET", "/x/relation/followings", FakeResp(200, {"code": 0, "data": {"total": 31, "list": [
+            {"mid": 7, "uname": "UP 七", "face": "http://i0.hdslb.com/f7.jpg", "sign": "签名"},
+            {"mid": 8, "uname": "UP 八", "face": "", "sign": ""}]}}))
+        r = bili_mcp.r_followings({"n": "30", "page": "1"})
+        self.assertEqual([x["mid"] for x in r["list"]], [7, 8])
+        self.assertTrue(r["list"][0]["face"].startswith("https://"))
+        self.assertEqual((r["total"], r["has_more"]), (31, True))
+        req = next(c for c in self.net.calls if c["url"].endswith("/x/relation/followings"))
+        self.assertEqual((req["params"]["vmid"], req["params"]["order_type"]), (42, "attention"))
+        self.assertFalse([c for c in self.net.calls if c["method"] == "POST"], "只读，不该有写请求")
+
+    def test_not_logged_in(self):
+        with open(bili.CRED_PATH, "w") as f:
+            json.dump({}, f)
+        self.c = bili.BiliClient()
+        bili_mcp.CLIENT = self.c
+        r = bili_mcp.r_followings({})
+        self.assertEqual(r.get("error"), "not_logged_in")
+        self.assertFalse([c for c in self.net.calls if "/x/relation/followings" in c["url"]])
